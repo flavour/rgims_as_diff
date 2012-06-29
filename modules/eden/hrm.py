@@ -250,7 +250,7 @@ class S3HRModel(S3Model):
                                             represent = hrm_human_resource_represent,
                                             label = T("Human Resource"),
                                             comment = T("Enter some characters to bring up a list of possible matches"),
-                                            widget = S3PersonAutocompleteWidget("hrm"),
+                                            widget = S3HumanResourceAutocompleteWidget(),
                                             ondelete = "RESTRICT"
                                             )
 
@@ -2085,12 +2085,14 @@ S3FilterFieldChange({
         """
 
         if job.tablename == "hrm_competency_rating":
-            name = "name" in job.data and job.data.name
+            data = job.data
+            name = "name" in data and data.name
             skill = False
             for cjob in job.components:
                 if cjob.tablename == "hrm_skill_type":
-                    if "name" in cjob.data:
-                        skill = cjob.data.name
+                    cdata = cjob.data
+                    if "name" in cdata:
+                        skill = cdata.name
             if skill == False:
                 return
 
@@ -2123,7 +2125,8 @@ S3FilterFieldChange({
         """
 
         if job.tablename == "hrm_course":
-            name = "name" in job.data and job.data.name
+            data = job.data
+            name = "name" in data and data.name
 
             table = job.table
             query = (table.name.lower() == name.lower())
@@ -2151,7 +2154,8 @@ S3FilterFieldChange({
         """
 
         if job.tablename == "hrm_skill":
-            name = "name" in job.data and job.data.name
+            data = job.data
+            name = "name" in data and data.name
 
             table = job.table
             query = (table.name.lower() == name.lower())
@@ -2179,7 +2183,8 @@ S3FilterFieldChange({
         """
 
         if job.tablename == "hrm_skill_type":
-            name = "name" in job.data and job.data.name
+            data = job.data
+            name = "name" in data and data.name
 
             table = job.table
             query = (table.name.lower() == name.lower())
@@ -3803,7 +3808,7 @@ def hrm_rheader(r, tabs=[]):
                 address_tab_name = T("Addresses")
             tabs = [(T("Person Details"), None),
                     (hr_record, "human_resource"),
-                    (T("Identity"), "identity"),
+                    (T("ID"), "identity"),
                     (T("Education"), "education"),
                     (T("Description"), "physical_description"),
                     (address_tab_name, "address"),
@@ -3875,8 +3880,6 @@ def hrm_rheader(r, tabs=[]):
         rheader = DIV(TABLE(
                             TR(TH("%s: " % table.name.label),
                                record.name),
-                            TR(TH("%s: " % table.code.label),
-                               record.code),
                             ),
                       rheader_tabs)
 

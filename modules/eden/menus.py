@@ -991,20 +991,21 @@ class S3OptionsMenu(object):
                         M("Search", f="inv_item", m="search"),
                         M("Search Shipped Items", f="track_item", m="search"),
                         M("Adjust Stock Levels", f="adj"),
+                        M("Kitting", f="kit"),
                         M("Import", f="inv_item", m="import", p="create"),
                     ),
                     M("Reports", c="inv", f="inv_item")(
                         M("Warehouse Stock", f="inv_item",m="report"),
-                        M("Monetization", c="inv", f="inv_item",
-                          m="search", vars=dict(report="mon")),
-                        M("Summary of Releases", c="inv", f="track_item",
-                          m="search", vars=dict(report="rel")),
-                        M("Summary of Incoming Supplies", c="inv", f="track_item",
-                          m="search", vars=dict(report="inc")),
-                        M("Utilization Report", c="inv", f="track_item",
-                          m="search", vars=dict(report="util")),
                         M("Expiration Report", c="inv", f="track_item",
                           m="search", vars=dict(report="exp")),
+                        M("Monetization Report", c="inv", f="inv_item",
+                          m="search", vars=dict(report="mon")),
+                        M("Utilization Report", c="inv", f="track_item",
+                          m="search", vars=dict(report="util")),
+                        M("Summary of Incoming Supplies", c="inv", f="track_item",
+                          m="search", vars=dict(report="inc")),
+                        M("Summary of Releases", c="inv", f="track_item",
+                          m="search", vars=dict(report="rel")),
                     ),
                     M(inv_recv_list, c="inv", f="recv")(
                         M("Add Received/Incoming Shipment", m="create"),
@@ -1056,7 +1057,7 @@ class S3OptionsMenu(object):
 
         return M(c="irs")(
                     M("Incident Reports", f="ireport")(
-                        M("Add Icident Report", m="create"),
+                        M("Add Incident Report", m="create"),
                         M("List All"),
                         M("Open Incidents", vars={"open":1}),
                         M("Map", m="map"),

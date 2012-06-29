@@ -635,7 +635,7 @@ class S3PersonModel(S3Model):
                                    # http://eden.sahanafoundation.org/ticket/834
                                    requires = IS_NOT_EMPTY(error_message = T("Please enter a first name")),
                                    comment =  DIV(_class="tooltip",
-                                                  _title="%s|%s" % (T("First name"),
+                                                  _title="%s|%s" % (T("First Name"),
                                                                     T("The first or only name of the person (mandatory)."))),
                                    label = T("First Name")),
                              Field("middle_name",
@@ -676,7 +676,10 @@ class S3PersonModel(S3Model):
                                                               T("Enter a valid date before")))],
                                    widget = S3DateWidget(past=1320,  # Months, so 110 years
                                                          future=0)),
-                             pr_age_group(label = T("Age group")),
+                             pr_age_group(
+                                    readable = False,
+                                    writable = False,
+                                ),
                              Field("nationality",
                                    requires = IS_NULL_OR(IS_IN_SET_LAZY(
                                                 lambda: gis.get_countries(key_type="code"),
@@ -2056,7 +2059,7 @@ class S3SavedSearch(S3Model):
                                         default = auth.user_id),
                                   Field("search_vars","text",
                                         label = T("Search Criteria"),
-                                        represent=lambda id:search_vars_represent(id)),
+                                        represent=lambda id:s3_search_vars_represent(id)),
                                   Field("subscribed","boolean",
                                         default=False),
                                   person_id(label = T("Person"),
