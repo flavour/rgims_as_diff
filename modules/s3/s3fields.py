@@ -51,18 +51,23 @@ __all__ = [
            "s3_address_update",
            "s3_comments",
            "s3_currency",
+           "s3_date",
            ]
 
 from datetime import datetime
-import uuid
+from uuid import uuid4
 
-from gluon import current
-from gluon.dal import Query, Field, SQLCustomType
+from gluon import *
+# Here are dependencies listed for reference:
+#from gluon import current
+#from gluon.dal import Field
+#from gluon.html import *
+#from gluon.validators import *
+from gluon.dal import Query, SQLCustomType
 from gluon.storage import Storage
-from gluon.html import *
-from gluon.validators import *
 
-from s3utils import s3_auth_user_represent, s3_auth_group_represent
+from s3utils import S3DateTime, s3_auth_user_represent, s3_auth_group_represent
+from s3widgets import S3DateWidget
 
 try:
     db = current.db
@@ -206,7 +211,7 @@ class S3ReusableField(object):
 # Use URNs according to http://tools.ietf.org/html/rfc4122
 s3uuid = SQLCustomType(type = "string",
                        native = "VARCHAR(128)",
-                       encoder = lambda x: "%s" % (uuid.uuid4().urn
+                       encoder = lambda x: "%s" % (uuid4().urn
                                     if x == ""
                                     else str(x.encode("utf-8"))),
                        decoder = lambda x: x)
@@ -215,7 +220,7 @@ if db and current.db._adapter.represent("X", s3uuid) != "'X'":
     # Old web2py DAL, must add quotes in encoder
     s3uuid = SQLCustomType(type = "string",
                            native = "VARCHAR(128)",
-                           encoder = (lambda x: "'%s'" % (uuid.uuid4().urn
+                           encoder = (lambda x: "'%s'" % (uuid4().urn
                                         if x == ""
                                         else str(x.encode("utf-8")).replace("'", "''"))),
                            decoder = (lambda x: x))
@@ -304,7 +309,7 @@ def s3_ownerstamp():
                                                         else None,
                                             represent=lambda id: \
                                                 id and s3_auth_user_represent(id) or \
-                                                       UNKNOWN_OPT,
+                                                       current.messages.UNKNOWN_OPT,
                                             ondelete="RESTRICT")
 
     # Role of users who collectively own the record
@@ -466,6 +471,7 @@ def s3_roles_permitted(name="roles_permitted", **attr):
 #
 # These fields are populated onaccept from location_id
 # - for many reads to fewer writes, this is faster than Virtual Fields
+# - @ToDO: No need for virtual fields - replace with simple joins
 #
 # Labels that vary by country are set by gis.update_table_hierarchy_labels()
 #
@@ -685,7 +691,7 @@ def s3_address_onvalidation(form):
 def s3_address_update(table, record_id):
     """
         Write the Address fields from the Location
-        - used by asset_asset
+        - used by asset_asset & hrm_human_resource
 
         @ToDo: Allow the reverse operation.
         If these fields are populated then create/update the location
@@ -783,6 +789,124 @@ def s3_currency(name="currency", **attr):
 
     f = S3ReusableField(name, length=3,
                         **attr)
+    return f()
+
+# =============================================================================
+# Date field
+#
+# @ToDo: s3_datetime
+#
+
+def s3_date(name="date", **attr):
+    """
+        Return a standard Date field
+
+        Additional options to normal S3ResuableField:
+            default == "now" (in addition to usual meanings)
+            past = x months
+            future = x months
+    """
+
+    if "past" in attr:
+        past = attr["past"]
+        del attr["past"]
+    else:
+        past = None
+    if "future" in attr:
+        future = attr["future"]
+        del attr["future"]
+    else:
+        future = None
+
+    if "default" in attr and attr["default"] == "now":
+        attr["default"] = current.request.utcnow
+    if "label" not in attr:
+        attr["label"] = current.T("Date")
+    if "represent" not in attr:
+        attr["represent"] = S3DateTime.date_represent
+    if "requires" not in attr:
+        if past is None and future is None:
+            requires = IS_DATE(
+                    format=current.deployment_settings.get_L10n_date_format()
+                )
+        else:
+            now = current.request.utcnow.date()
+            current_month = now.month
+            if past is None:
+                future_month = now.month + future
+                if future_month <= 12:
+                    max = now.replace(month=future_month)
+                else:
+                    current_year = now.year
+                    years = int(future_month/12)
+                    future_year = current_year + years
+                    future_month = future_month - (years * 12)
+                    max = now.replace(year=future_year,
+                                      month=future_month)
+                requires = IS_DATE_IN_RANGE(
+                        format=current.deployment_settings.get_L10n_date_format(),
+                        maximum=max,
+                        error_message=current.T("Date must be %(max)s or earlier!")
+                    )
+            elif future is None:
+                if past < current_month:
+                    min = now.replace(month=current_month - past)
+                else:
+                    current_year = now.year
+                    past_years = int(past/12)
+                    past_months = past - (past_years * 12)
+                    min = now.replace(year=current_year - past_years,
+                                      month=current_month - past_months)
+                requires = IS_DATE_IN_RANGE(
+                        format=current.deployment_settings.get_L10n_date_format(),
+                        minimum=min,
+                        error_message=current.T("Date must be %(min)s or later!")
+                    )
+            else:
+                future_month = now.month + future
+                if future_month < 13:
+                    max = now.replace(month=future_month)
+                else:
+                    current_year = now.year
+                    years = int(future_month/12)
+                    future_year = now.year + years
+                    future_month = future_month - (years * 12)
+                    max = now.replace(year=future_year,
+                                      month=future_month)
+                if past < current_month:
+                    min = now.replace(month=current_month - past)
+                else:
+                    current_year = now.year
+                    past_years = int(past/12)
+                    past_months = past - (past_years * 12)
+                    min = now.replace(year=current_year - past_years,
+                                      month=current_month - past_months)
+                requires = IS_DATE_IN_RANGE(
+                        format=current.deployment_settings.get_L10n_date_format(),
+                        maximum=max,
+                        minimum=min,
+                        error_message=current.T("Date must be between %(min)s and %(max)s!")
+                    )
+        if "empty" in attr:
+            if attr["empty"] is False:
+                attr["requires"] = requires
+            else:
+                attr["requires"] = IS_EMPTY_OR(requires)
+            del attr["empty"]
+        else:
+            # Default
+            attr["requires"] = IS_EMPTY_OR(requires)
+    if "widget" not in attr:
+        if past is None and future is None:
+            attr["widget"] = S3DateWidget()
+        elif past is None:
+            attr["widget"] = S3DateWidget(future=future)
+        elif future is None:
+            attr["widget"] = S3DateWidget(past=past)
+        else:
+            attr["widget"] = S3DateWidget(past=past, future=future)
+
+    f = S3ReusableField(name, "date", **attr)
     return f()
 
 # END =========================================================================

@@ -33,20 +33,13 @@ __all__ = ["AuthS3",
            "S3Permission",
            "S3Audit",
            "S3RoleManager",
-           "FaceBookAccount",
-           "GooglePlusAccount",
            "S3OrgRoleManager",
-           "S3PersonRoleManager"
-          ]
+           "S3PersonRoleManager",
+           ]
 
 import datetime
 import re
-import time
-import uuid
-import urllib
-from urllib import urlencode
-import urllib2
-import math
+from uuid import uuid4
 
 try:
     import json # try stdlib (Python 2.6)
@@ -57,21 +50,18 @@ except ImportError:
         import gluon.contrib.simplejson as json # fallback to pure-Python module
 
 from gluon import *
+from gluon.dal import Row, Query, Set, Table, Expression
 from gluon.storage import Storage, Messages
-
-from gluon.dal import Field, Row, Query, Set, Table, Expression
-from gluon.sqlhtml import CheckboxesWidget, OptionsWidget, StringWidget
+from gluon.sqlhtml import OptionsWidget
 from gluon.tools import Auth, callback, addrow
 from gluon.utils import web2py_uuid
-from gluon.validators import IS_SLUG
+
 from gluon.contrib.simplejson.ordered_dict import OrderedDict
-from gluon.contrib.login_methods.oauth20_account import OAuthAccount
 
-from s3method import S3Method
-from s3validators import IS_ACL
-
-from s3utils import s3_mark_required
 from s3fields import s3_uid, s3_timestamp, s3_deletion_status
+from s3method import S3Method
+from s3utils import s3_mark_required
+from s3error import S3PermissionError
 
 DEFAULT = lambda: None
 table_field = re.compile("[\w_]+\.[\w_]+")
@@ -212,8 +202,8 @@ class AuthS3(Auth):
             shelter = T("Shelter")
         self.org_site_types = Storage(
                                       cr_shelter = shelter,
-                                      #org_facility = T("Facility"),
-                                      org_facility = T("Site"),
+                                      org_facility = T("Facility"),
+                                      #org_facility = T("Site"),
                                       org_office = T("Office"),
                                       hms_hospital = T("Hospital"),
                                       #fire_station = T("Fire Station"),
@@ -513,11 +503,11 @@ class AuthS3(Auth):
             of a register form
         """
 
-        response = current.response
+        cookies = current.response.cookies
 
-        response.cookies["registered"] = "yes"
-        response.cookies["registered"]["expires"] = 365 * 24 * 3600 # 1 year
-        response.cookies["registered"]["path"] = "/"
+        cookies["registered"] = "yes"
+        cookies["registered"]["expires"] = 365 * 24 * 3600 # 1 year
+        cookies["registered"]["path"] = "/"
 
     # -------------------------------------------------------------------------
     def login(self,
@@ -883,8 +873,7 @@ class AuthS3(Auth):
         if settings.captcha != None:
             form[0].insert(-1, TR("", settings.captcha, ""))
 
-        import uuid
-        user.registration_key.default = key = str(uuid.uuid4())
+        user.registration_key.default = key = str(uuid4())
 
         if form.accepts(request.vars, session, formname="register",
                         onvalidation=onvalidation):
@@ -1208,9 +1197,9 @@ class AuthS3(Auth):
                 record_id = htable.insert(**record)
                 if record_id:
                     record["id"] = record_id
-                    manager = current.manager
-                    manager.model.update_super(htable, record)
-                    manager.onaccept(htablename, record, method="create")
+                    s3db.update_super(htable, record)
+                    current.manager.onaccept(htablename, record,
+                                             method="create")
 
         # Return person_id for init scripts
         return person_id
@@ -1225,8 +1214,6 @@ class AuthS3(Auth):
 
         db = current.db
         s3db = current.s3db
-        manager = current.manager
-        model = manager.model
 
         organisation_id = user.organisation_id
         if not organisation_id:
@@ -1242,8 +1229,8 @@ class AuthS3(Auth):
                 # Callbacks
                 if organisation_id:
                     record["id"] = organisation_id
-                    model.update_super(otable, record)
-                    manager.onaccept(otable, record, method="create")
+                    s3db.update_super(otable, record)
+                    current.manager.onaccept(otable, record, method="create")
                     self.s3_set_record_owner(otable, organisation_id)
 
                 # Update user
@@ -1676,6 +1663,7 @@ class AuthS3(Auth):
         """ Update pe_id, roles and realms for the current user """
 
         session = current.session
+        settings = current.deployment_settings
 
         if "permissions" in current.response.s3:
             del current.response.s3["permissions"]
@@ -1692,6 +1680,22 @@ class AuthS3(Auth):
             s3db = current.s3db
 
             user_id = self.user.id
+
+            # Lookup approver role and store in session
+            if settings.get_auth_record_approval():
+                approver_role = session["approver_role"]
+                if approver_role is None:
+                    approver_role = system_roles.ADMIN
+                    role_uuid = settings.get_auth_record_approver_role()
+                    if role_uuid:
+                        gtable = self.settings.table_group
+                        query = (gtable.uuid == role_uuid) & \
+                                (gtable.deleted != True)
+                        row = db(query).select(gtable.id,
+                                               limitby=(0, 1)).first()
+                        if row:
+                            approver_role = row.id
+                session["approver_role"] = approver_role
 
             # Set pe_id for current user
             ltable = s3db.table("pr_person_user")
@@ -1900,8 +1904,7 @@ class AuthS3(Auth):
             record = current.db(query).select(limitby=(0, 1)).first()
         else:
             record = None
-            import uuid
-            uid = uuid.uuid4()
+            uid = uuid4()
 
         if record:
             role_id = record.id
@@ -2797,9 +2800,9 @@ class AuthS3(Auth):
                     return action(*a, **b)
 
                 if not self.s3_logged_in():
+                    import urllib
                     request = current.request
                     next = URL(args=request.args, vars=request.get_vars)
-                    import urllib
                     redirect("%s?_next=%s" % (self.settings.login_url,
                                               urllib.quote(next)))
 
@@ -2936,7 +2939,6 @@ class AuthS3(Auth):
         """
 
         s3db = current.s3db
-        model = current.manager.model
 
         # Ownership fields
         OUSR = "owned_by_user"
@@ -3021,7 +3023,7 @@ class AuthS3(Auth):
         # Find owned_by_group
         if OGRP in fields_in_table:
             # Check for type-specific handler to find the owner group
-            handler = model.get_config(tablename, "owner_group")
+            handler = s3db.get_config(tablename, "owner_group")
             if handler:
                 if callable(handler):
                     data[OGRP] = handler(table, row)
@@ -3037,7 +3039,7 @@ class AuthS3(Auth):
                 data[OENT] = fields[OENT]
             elif not row[OENT] or force_update:
                 # Check for type-specific handler to find the owner entity
-                handler = model.get_config(tablename, "owner_entity")
+                handler = s3db.get_config(tablename, "owner_entity")
                 if callable(handler):
                     owner_entity = handler(table, row)
                     data[OENT] = owner_entity
@@ -3122,7 +3124,7 @@ class AuthS3(Auth):
                 tablename = table._tablename
             else:
                 tablename = table
-            current.manager.configure(tablename, insertable = False)
+            s3db.configure(tablename, insertable = False)
 
         return []
 
@@ -3169,11 +3171,23 @@ class AuthS3(Auth):
 
         return []
 
-# =============================================================================
-class S3PermissionError(StandardError):
-    """ Custom exception class for low-level permission checks """
+    # -------------------------------------------------------------------------
+    def root_org(self):
+        """
+            Return the current user's root organisation or None
+        """
 
-    pass
+        if not self.user:
+            return None
+        org_id = self.user.organisation_id
+        if not org_id:
+            return None
+        return current.cache.ram(
+                    # Common key for all users of this org
+                    "root_org_%s" % org_id,
+                    lambda: current.s3db.org_root_organisation(organisation_id=org_id)[0],
+                    time_expire=120
+                )
 
 # =============================================================================
 class S3Permission(object):
@@ -3207,6 +3221,7 @@ class S3Permission(object):
         "report": READ,
         "search": READ,
         "update": UPDATE,
+        "approve": UPDATE,
         "delete": DELETE})
 
     # Lambda expressions for ACL handling
@@ -3727,6 +3742,56 @@ class S3Permission(object):
         return None
 
     # -------------------------------------------------------------------------
+    # Record approval
+    # -------------------------------------------------------------------------
+    def approved(self, table, record, approved=True):
+        """
+            Check whether a record has been approved or not
+
+            @param table: the table
+            @param record: the record or record ID
+            @param approved: True = check if approved,
+                             False = check if unapproved
+        """
+
+        db = current.db
+
+        if "approved_by" not in table.fields:
+            return True
+
+        if isinstance(record, (Row, dict)):
+            if "approved_by" not in record:
+                record_id = record[table._id]
+                record = None
+        else:
+            record_id = record
+            record = None
+
+        if record is None and record_id:
+            query = table._id == record_id
+            record = db(query).select(table.approved_by, limitby=(0, 1)).first()
+            if not record:
+                return False
+
+        if approved and record["approved_by"] is not None:
+            return True
+        elif not approved and record["approved_by"] is None:
+            return True
+        else:
+            return False
+
+    # -------------------------------------------------------------------------
+    def unapproved(self, table, record):
+        """
+            Check whether a record has not been approved yet
+
+            @param table: the table
+            @param record: the record or record ID
+        """
+
+        return self.approved(table, record, approved=False)
+
+    # -------------------------------------------------------------------------
     # Authorization
     # -------------------------------------------------------------------------
     def has_permission(self, method, c=None, f=None, t=None, record=None):
@@ -3863,13 +3928,36 @@ class S3Permission(object):
 
         if permitted is None:
             raise self.error("Cannot determine permission.")
-        elif permitted:
+
+        elif permitted and \
+             current.deployment_settings.get_auth_record_approval() and \
+             t is not None and record is not None:
+
+            # Check approval
+            if not hasattr(t, "_tablename"):
+                table = current.s3db.table(t)
+                if not table:
+                    raise AttributeError("undefined table %s" % tablename)
+            else:
+                table = t
+            approver_role = None
+            if "approved_by" in table.fields:
+                approver_role = current.session["approver_role"]
+            if approver_role is None:
+                approver_role = sr.ADMIN
+            if approver_role not in realms or "approve" not in method:
+                permitted = self.approved(table, record) #or is_owner
+                if not permitted:
+                    _debug("==> Record not approved")
+            else:
+                permitted = True
+
+        if permitted:
             _debug("*** GRANTED ***")
         else:
             _debug("*** DENIED ***")
 
         response.s3.permissions[key] = permitted
-
         return permitted
 
     # -------------------------------------------------------------------------
@@ -3925,6 +4013,21 @@ class S3Permission(object):
             _debug("==> user is ADMIN")
             _debug("*** ALL RECORDS ***")
             return ALL_RECORDS
+
+        approve = current.deployment_settings.get_auth_record_approval()
+        if approve and "approved_by" in table.fields:
+            approver_role = current.session["approver_role"]
+            if approver_role is None:
+                approver_role = sr.ADMIN
+            if approver_role not in realms or "approve" not in method:
+                base_filter = (table.approved_by != None)
+                approve = False
+            else:
+                base_filter = (table.approved_by == None)
+                approve = True
+            ALL_RECORDS = base_filter
+        else:
+            base_filter = None
 
         if not self.use_cacls:
             _debug("==> simple authorization")
@@ -4006,6 +4109,9 @@ class S3Permission(object):
             elif use_realm:
                 _debug("==> permitted for any records owned by entities %s" % str(uacls+oacls))
                 query = self.realm_query(table, uacls+oacls)
+
+            if query is not None and approve:
+                query = base_filter & query
 
         # Fallback
         if query is None:
@@ -4695,6 +4801,8 @@ class S3RoleManager(S3Method):
             resource = self.resource
             manager = current.manager
             auth = manager.auth
+            options = auth.permission.PERMISSION_OPTS
+            NONE = auth.permission.NONE
             vars = self.request.get_vars
             table = self.table
 
@@ -4751,8 +4859,8 @@ class S3RoleManager(S3Method):
                 if c not in acls[any]:
                     acls[any][c] = Storage()
                 if any not in acls[any][c]:
-                    acls[any][c][any] = Storage(oacl = auth.permission.NONE,
-                                                uacl = auth.permission.NONE)
+                    acls[any][c][any] = Storage(oacl = NONE,
+                                                uacl = NONE)
 
             # Table header
             columns = []
@@ -4821,8 +4929,6 @@ class S3RoleManager(S3Method):
 
                         oaclstr = ""
                         uaclstr = ""
-                        options = auth.permission.PERMISSION_OPTS
-                        NONE = auth.permission.NONE
                         for o in options:
                             if o == NONE and oacl == NONE:
                                 oaclstr = "%s%s" % (oaclstr, options[o][0])
@@ -4894,8 +5000,9 @@ class S3RoleManager(S3Method):
         CANCEL = T("Cancel")
 
         auth = manager.auth
-        model = manager.model
-        acl_table = auth.permission.table
+        permission = auth.permission
+        acl_table = permission.table
+        NONE = permission.NONE
 
         if r.interactive:
 
@@ -4914,8 +5021,9 @@ class S3RoleManager(S3Method):
             # Form helpers ----------------------------------------------------
             mandatory = lambda l: DIV(l, XML("&nbsp;"),
                                       SPAN("*", _class="req"))
-            acl_table.oacl.requires = IS_ACL(auth.permission.PERMISSION_OPTS)
-            acl_table.uacl.requires = IS_ACL(auth.permission.PERMISSION_OPTS)
+            from s3validators import IS_ACL
+            acl_table.oacl.requires = IS_ACL(permission.PERMISSION_OPTS)
+            acl_table.uacl.requires = IS_ACL(permission.PERMISSION_OPTS)
             from s3widgets import S3ACLWidget
             acl_widget = lambda f, n, v: \
                             S3ACLWidget.widget(acl_table[f], v, _id=n, _name=n,
@@ -4971,7 +5079,7 @@ class S3RoleManager(S3Method):
                     if not acl.function:
                         f = any
                     else:
-                        if auth.permission.use_facls:
+                        if permission.use_facls:
                             f = acl.function
                         else:
                             continue
@@ -4993,8 +5101,8 @@ class S3RoleManager(S3Method):
                                   controller = c,
                                   function = any,
                                   tablename = None,
-                                  uacl = auth.permission.NONE,
-                                  oacl = auth.permission.NONE)
+                                  uacl = NONE,
+                                  oacl = NONE)
                 if c in acls:
                     acl_list = acls[c]
                     if any not in acl_list:
@@ -5004,8 +5112,8 @@ class S3RoleManager(S3Method):
                 acl = acl_list[any]
                 _class = i % 2 and "even" or "odd"
                 i += 1
-                uacl = auth.permission.NONE
-                oacl = auth.permission.NONE
+                uacl = NONE
+                oacl = NONE
                 if acl.oacl is not None:
                     oacl = acl.oacl
                 if acl.uacl is not None:
@@ -5024,11 +5132,11 @@ class S3RoleManager(S3Method):
 
             # Tabs
             tabs = [SPAN(A(CACL), _class="tab_here")]
-            if auth.permission.use_facls:
-                _class = auth.permission.use_tacls and \
+            if permission.use_facls:
+                _class = permission.use_tacls and \
                          "tab_other" or "tab_last"
                 tabs.append(SPAN(A(FACL, _class="facl-tab"), _class=_class))
-            if auth.permission.use_tacls:
+            if permission.use_tacls:
                 tabs.append(SPAN(A(TACL, _class="tacl-tab"),
                                  _class="tab_last"))
 
@@ -5037,7 +5145,7 @@ class S3RoleManager(S3Method):
                                      _id="controller-acls"))
 
             # Function ACL table ----------------------------------------------
-            if auth.permission.use_facls:
+            if permission.use_facls:
 
                 # Table header
                 thead = THEAD(TR(TH(T("Application")),
@@ -5062,8 +5170,8 @@ class S3RoleManager(S3Method):
                         acl = acl_list[f]
                         _class = i % 2 and "even" or "odd"
                         i += 1
-                        uacl = auth.permission.NONE
-                        oacl = auth.permission.NONE
+                        uacl = NONE
+                        oacl = NONE
                         if acl.oacl is not None:
                             oacl = acl.oacl
                         if acl.uacl is not None:
@@ -5091,15 +5199,15 @@ class S3RoleManager(S3Method):
                 form_rows.append(TR(
                     TD(c_select),
                     TD(INPUT(_type="text", _name="new_function")),
-                    TD(acl_widget("uacl", "new_c_uacl", auth.permission.NONE)),
-                    TD(acl_widget("oacl", "new_c_oacl", auth.permission.NONE)),
+                    TD(acl_widget("uacl", "new_c_uacl", NONE)),
+                    TD(acl_widget("oacl", "new_c_oacl", NONE)),
                     TD(new_acl), _class=_class))
 
                 # Tabs to change to the other view
                 tabs = [SPAN(A(CACL, _class="cacl-tab"),
                              _class="tab_other"),
                         SPAN(A(FACL), _class="tab_here")]
-                if auth.permission.use_tacls:
+                if permission.use_tacls:
                     tabs.append(SPAN(A(TACL, _class="tacl-tab"),
                                      _class="tab_last"))
 
@@ -5109,7 +5217,7 @@ class S3RoleManager(S3Method):
 
             # Table ACL table -------------------------------------------------
 
-            if auth.permission.use_tacls:
+            if permission.use_tacls:
                 query = (acl_table.deleted != True) & \
                         (acl_table.tablename != None)
                 tacls = db(query).select(acl_table.tablename, distinct=True)
@@ -5131,8 +5239,8 @@ class S3RoleManager(S3Method):
                 for t in ptables:
                     _class = i % 2 and "even" or "odd"
                     i += 1
-                    uacl = auth.permission.NONE
-                    oacl = auth.permission.NONE
+                    uacl = NONE
+                    oacl = NONE
                     _id = None
                     if t in acls:
                         acl = acls[t]
@@ -5161,14 +5269,14 @@ class S3RoleManager(S3Method):
                             #requires=IS_EMPTY_OR(IS_IN_SET(all_tables,
                                                            #zero=None,
                                         #error_message=T("Undefined Table"))))),
-                    TD(acl_widget("uacl", "new_t_uacl", auth.permission.NONE)),
-                    TD(acl_widget("oacl", "new_t_oacl", auth.permission.NONE)),
+                    TD(acl_widget("uacl", "new_t_uacl", NONE)),
+                    TD(acl_widget("oacl", "new_t_oacl", NONE)),
                     TD(new_acl), _class=_class))
 
                 # Tabs
                 tabs = [SPAN(A(CACL, _class="cacl-tab"),
                              _class="tab_other")]
-                if auth.permission.use_facls:
+                if permission.use_facls:
                     tabs.append(SPAN(A(FACL, _class="facl-tab"),
                                      _class="tab_other"))
                 tabs.append(SPAN(A(TACL), _class="tab_here"))
@@ -5211,15 +5319,13 @@ class S3RoleManager(S3Method):
                                                            role.role,
                                                            T("updated"))
                 else:
-                    import uuid
-                    role.uuid = uuid.uuid4()
+                    role.uuid = uuid4()
                     role_id = self.table.insert(**role)
                     session.confirmation = '%s "%s" %s' % (T("Role"),
                                                            role.role,
                                                            T("created"))
 
                 if role_id:
-
                     # Collect the ACLs
                     acls = Storage()
                     for v in vars:
@@ -5897,321 +6003,11 @@ class S3RoleManager(S3Method):
         return representation
 
 # =============================================================================
-class FaceBookAccount(OAuthAccount):
-    """ OAuth implementation for FaceBook """
-
-    AUTH_URL = "https://graph.facebook.com/oauth/authorize"
-    TOKEN_URL = "https://graph.facebook.com/oauth/access_token"
-
-    # -------------------------------------------------------------------------
-    def __init__(self):
-
-        from facebook import GraphAPI, GraphAPIError
-
-        self.GraphAPI = GraphAPI
-        self.GraphAPIError = GraphAPIError
-        g = dict(GraphAPI=GraphAPI,
-                 GraphAPIError=GraphAPIError,
-                 request=current.request,
-                 response=current.response,
-                 session=current.session,
-                 HTTP=HTTP)
-        client = current.auth.settings.facebook
-        OAuthAccount.__init__(self, g, client["id"], client["secret"],
-                              self.AUTH_URL, self.TOKEN_URL,
-                              scope="email,user_about_me,user_location,user_photos,user_relationships,user_birthday,user_website,create_event,user_events,publish_stream")
-        self.graph = None
-
-    # -------------------------------------------------------------------------
-    def login_url(self, next="/"):
-        """ Overriding to produce a different redirect_uri """
-
-        request = current.request
-        session = current.session
-        if not self.accessToken():
-            if not request.vars.code:
-                session.redirect_uri = "%s/%s/default/facebook/login" % \
-                    (current.deployment_settings.get_base_public_url(),
-                     request.application)
-                data = dict(redirect_uri=session.redirect_uri,
-                            response_type="code",
-                            client_id=self.client_id)
-                if self.args:
-                    data.update(self.args)
-                auth_request_url = self.auth_url + "?" + urlencode(data)
-                raise HTTP(307,
-                           "You are not authenticated: you are being redirected to the <a href='" + auth_request_url + "'> authentication server</a>",
-                           Location=auth_request_url)
-            else:
-                session.code = request.vars.code
-                self.accessToken()
-                #return session.code
-        return next
-
-    # -------------------------------------------------------------------------
-    def get_user(self):
-        """ Returns the user using the Graph API. """
-
-        db = current.db
-        auth = current.auth
-        session = current.session
-
-        if not self.accessToken():
-            return None
-
-        if not self.graph:
-            self.graph = self.GraphAPI((self.accessToken()))
-
-        user = None
-        try:
-            user = self.graph.get_object_c("me")
-        except self.GraphAPIError:
-            self.session.token = None
-            self.graph = None
-
-        if user:
-            # Check if a user with this email has already registered
-            #session.facebooklogin = True
-            table = auth.settings.table_user
-            query = (table.email == user["email"])
-            existent = db(query).select(table.id,
-                                        table.password,
-                                        limitby=(0, 1)).first()
-            if existent:
-                #session["%s_setpassword" % existent.id] = existent.password
-                _user = dict(first_name = user.get("first_name", ""),
-                             last_name = user.get("last_name", ""),
-                             facebookid = user["id"],
-                             facebook = user.get("username", user["id"]),
-                             email = user["email"],
-                             password = existent.password
-                            )
-                return _user
-            else:
-                # b = user["birthday"]
-                # birthday = "%s-%s-%s" % (b[-4:], b[0:2], b[-7:-5])
-                # if 'location' in user:
-                #     session.flocation = user['location']
-                #session["is_new_from"] = "facebook"
-                auth.s3_send_welcome_email(user)
-                # auth.initial_user_permission(user)  # Called on profile page
-                _user = dict(first_name = user.get("first_name", ""),
-                             last_name = user.get("last_name", ""),
-                             facebookid = user["id"],
-                             facebook = user.get("username", user["id"]),
-                             nickname = IS_SLUG()(user.get("username", "%(first_name)s-%(last_name)s" % user) + "-" + user['id'][:5])[0],
-                             email = user["email"],
-                             # birthdate = birthday,
-                             about = user.get("bio", ""),
-                             website = user.get("website", ""),
-                             # gender = user.get("gender", "Not specified").title(),
-                             photo_source = 3,
-                             tagline = user.get("link", ""),
-                             registration_type = 2,
-                            )
-                return _user
-
-# =============================================================================
-class GooglePlusAccount(OAuthAccount):
-    """
-        OAuth implementation for Google
-        https://code.google.com/apis/console/
-    """
-
-    AUTH_URL = "https://accounts.google.com/o/oauth2/auth"
-    TOKEN_URL = "https://accounts.google.com/o/oauth2/token"
-    API_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
-
-    # -------------------------------------------------------------------------
-    def __init__(self):
-
-        request = current.request
-        settings = current.deployment_settings
-
-        g = dict(request=request,
-                 response=current.response,
-                 session=current.session,
-                 HTTP=HTTP)
-
-        client = current.auth.settings.google
-
-        self.globals = g
-        self.client = client
-        self.client_id = client["id"]
-        self.client_secret = client["secret"]
-        self.auth_url = self.AUTH_URL
-        self.args = dict(
-                scope = "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
-                user_agent = "google-api-client-python-plus-cmdline/1.0",
-                xoauth_displayname = settings.get_system_name(),
-                response_type = "code",
-                redirect_uri = "%s/%s/default/google/login" % \
-                    (settings.get_base_public_url(),
-                     request.application),
-                approval_prompt = "force",
-                state = "google"
-            )
-        self.graph = None
-
-    # -------------------------------------------------------------------------
-    def __build_url_opener(self, uri):
-        """
-            Build the url opener for managing HTTP Basic Athentication
-        """
-        # Create an OpenerDirector with support
-        # for Basic HTTP Authentication...
-
-        auth_handler = urllib2.HTTPBasicAuthHandler()
-        auth_handler.add_password(None,
-                                  uri,
-                                  self.client_id,
-                                  self.client_secret)
-        opener = urllib2.build_opener(auth_handler)
-        return opener
-
-    # -------------------------------------------------------------------------
-    def accessToken(self):
-        """
-            Return the access token generated by the authenticating server.
-
-            If token is already in the session that one will be used.
-            Otherwise the token is fetched from the auth server.
-        """
-
-        session = current.session
-
-        if session.token and session.token.has_key("expires"):
-            expires = session.token["expires"]
-            # reuse token until expiration
-            if expires == 0 or expires > time.time():
-                return session.token["access_token"]
-        if session.code:
-            data = dict(client_id = self.client_id,
-                        client_secret = self.client_secret,
-                        redirect_uri = self.args["redirect_uri"],
-                        code = session.code,
-                        grant_type = "authorization_code",
-                        scope = "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile")
-
-            # if self.args:
-            #     data.update(self.args)
-            open_url = None
-            opener = self.__build_url_opener(self.TOKEN_URL)
-            try:
-                open_url = opener.open(self.TOKEN_URL, urlencode(data))
-            except urllib2.HTTPError, e:
-                raise Exception(e.read())
-            finally:
-                del session.code # throw it away
-
-            if open_url:
-                try:
-                    session.token = json.loads(open_url.read())
-                    session.token["expires"] = int(session.token["expires_in"]) + \
-                        time.time()
-                finally:
-                    opener.close()
-                return session.token["access_token"]
-
-        session.token = None
-        return None
-
-    # -------------------------------------------------------------------------
-    def login_url(self, next="/"):
-        """ Overriding to produce a different redirect_uri """
-
-        request = current.request
-        session = current.session
-        if not self.accessToken():
-            if not request.vars.code:
-                session.redirect_uri = self.args["redirect_uri"]
-                data = dict(redirect_uri=session.redirect_uri,
-                            response_type="code",
-                            client_id=self.client_id)
-                if self.args:
-                    data.update(self.args)
-                auth_request_url = self.auth_url + "?" + urlencode(data)
-                raise HTTP(307,
-                           "You are not authenticated: you are being redirected to the <a href='" + auth_request_url + "'> authentication server</a>",
-                           Location=auth_request_url)
-            else:
-                session.code = request.vars.code
-                self.accessToken()
-                #return session.code
-        return next
-
-    # -------------------------------------------------------------------------
-    def get_user(self):
-        """ Returns the user using the Graph API. """
-
-        db = current.db
-        auth = current.auth
-        session = current.session
-
-        if not self.accessToken():
-            return None
-
-        user = None
-        try:
-            user = self.call_api()
-        except Exception, e:
-            session.token = None
-
-        if user:
-            # Check if a user with this email has already registered
-            #session.googlelogin = True
-            table = auth.settings.table_user
-            query = (table.email == user["email"])
-            existent = db(query).select(table.id,
-                                        table.password,
-                                        limitby=(0, 1)).first()
-            if existent:
-                #session["%s_setpassword" % existent.id] = existent.password
-                _user = dict(
-                            #first_name = user.get("given_name", user["name"]),
-                            #last_name = user.get("family_name", user["name"]),
-                            googleid = user["id"],
-                            email = user["email"],
-                            password = existent.password
-                            )
-                return _user
-            else:
-                # b = user["birthday"]
-                # birthday = "%s-%s-%s" % (b[-4:], b[0:2], b[-7:-5])
-                # if "location" in user:
-                #     session.flocation = user["location"]
-                #session["is_new_from"] = "google"
-                auth.s3_send_welcome_email(user)
-                _user = dict(
-                            first_name = user.get("given_name", user["name"].split()[0]),
-                            last_name = user.get("family_name", user["name"].split()[-1]),
-                            googleid = user["id"],
-                            nickname = "%(first_name)s-%(last_name)s-%(id)s" % dict(first_name=user["name"].split()[0].lower(), last_name=user["name"].split()[-1].lower(), id=user['id'][:5]),
-                            email = user["email"],
-                            # birthdate = birthday,
-                            website = user.get("link", ""),
-                            # gender = user.get("gender", "Not specified").title(),
-                            photo_source = 6 if user.get("picture", None) else 2,
-                            googlepicture = user.get("picture", ""),
-                            registration_type = 3,
-                            )
-                return _user
-
-    # -------------------------------------------------------------------------
-    def call_api(self):
-        api_return = urllib.urlopen("https://www.googleapis.com/oauth2/v1/userinfo?access_token=%s" % self.accessToken())
-        user = json.loads(api_return.read())
-        if user:
-            return user
-        else:
-            self.session.token = None
-            return None
-
-# =============================================================================
 class S3GroupedOptionsWidget(OptionsWidget):
     """
         A custom Field widget to create a SELECT element with grouped options.
     """
+
     @classmethod
     def widget(cls, field, value, options, **attributes):
         """
@@ -6225,6 +6021,7 @@ class S3GroupedOptionsWidget(OptionsWidget):
 
             @returns: SELECT object
         """
+
         default = dict(value=value)
         attr = cls._attributes(field, default, **attributes)
         select_items = []
@@ -6282,7 +6079,6 @@ class S3EntityRoleManager(S3Method):
     # -------------------------------------------------------------------------
     def apply_method(self, r, **attr):
         """
-            @todo: docstring?
         """
 
         if self.method == "roles" and \
@@ -6342,6 +6138,7 @@ class S3EntityRoleManager(S3Method):
                 }
             }
         """
+
         T = current.T
 
         # organisation or office entity
@@ -6391,6 +6188,7 @@ class S3EntityRoleManager(S3Method):
             # what page of assigned roles to view
             pagination_offset = int(r.get_vars.get("page_offset", 0))
             # the number of pages of assigned roles
+            import math
             pagination_pages = int(math.ceil(len(self.assigned_roles) / float(pagination_size)))
             # the list of objects to show on this page sorted by name
             pagination_list = [(self.objects[id], id) for id in self.assigned_roles]
@@ -6607,10 +6405,6 @@ class S3EntityRoleManager(S3Method):
 class S3OrgRoleManager(S3EntityRoleManager):
 
     def __init__(self, *args, **kwargs):
-        """
-            @todo: docstring?
-        """
-
         super(S3OrgRoleManager, self).__init__(*args, **kwargs)
 
         # dictionary {id: name, ...} of user accounts
@@ -6823,6 +6617,5 @@ class S3PersonRoleManager(S3EntityRoleManager):
             fields.insert(0, object_field)
 
         return fields
-
 
 # END =========================================================================

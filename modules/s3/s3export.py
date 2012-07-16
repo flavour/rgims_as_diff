@@ -45,13 +45,7 @@ class S3Exporter(object):
     """
 
     def __init__(self):
-        """
-            Constructor
-
-            @param manager: the S3ResourceController
-
-            @todo 2.3: error message completion
-        """
+        """ Constructor """
 
         T = current.T
 
@@ -108,6 +102,8 @@ class S3Exporter(object):
             Export a resource as JSON
 
             @note: export does not include components!
+
+            @ToDo: Deprecate (after modifying s3search json functions)
 
             @param resource: the resource to export
             @param start: index of the first record to export (for slicing)

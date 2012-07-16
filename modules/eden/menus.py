@@ -366,10 +366,6 @@ class S3OptionsMenu(object):
                         #M("Membership", f="membership"),
                     ),
                     M("Database", c="appadmin", f="index")(
-                        M("Import", c="admin", f="import_file"),
-                        #M("Import", c="admin", f="import_data"),
-                        #M("Export", c="admin", f="export_data"),
-                        #M("Import Jobs", c="admin", f="import_job"),
                         M("Raw Database access", c="appadmin", f="index")
                     ),
                     M("Synchronization", c="sync", f="index")(
@@ -812,10 +808,11 @@ class S3OptionsMenu(object):
         personal_mode = lambda i: s3.hrm.mode is not None
         is_org_admin = lambda i: s3.hrm.orgs and True or \
                                  ADMIN in s3.roles
+        use_teams = lambda i: current.deployment_settings.get_hrm_use_teams()
 
         return M(c="hrm")(
                     M("Staff", f="staff",
-                      check=[manager_mode])(
+                      check=manager_mode)(
                         M("New", m="create"),
                         M("List All"),
                         M("Search", m="search"),
@@ -823,7 +820,7 @@ class S3OptionsMenu(object):
                           vars={"group":"staff"}, p="create"),
                     ),
                     M("Teams", f="group",
-                      check=manager_mode)(
+                      check=[manager_mode, use_teams])(
                         M("New", m="create"),
                         M("List All"),
                     ),
@@ -891,9 +888,10 @@ class S3OptionsMenu(object):
                                  ADMIN in s3.roles
 
         settings = current.deployment_settings
-        show_programmes = lambda i: settings.get_hrm_experience() == "programme"
+        show_programmes = lambda i: settings.get_hrm_vol_experience() == "programme"
         show_tasks = lambda i: settings.has_module("project") and \
                                settings.get_project_mode_task()
+        use_teams = lambda i: settings.get_hrm_use_teams()
 
         return M(c="vol")(
                     M("Volunteers", f="volunteer",
@@ -905,7 +903,7 @@ class S3OptionsMenu(object):
                           vars={"group":"volunteer"}, p="create"),
                     ),
                     M("Teams", f="group",
-                      check=manager_mode)(
+                      check=[manager_mode, use_teams])(
                         M("New", m="create"),
                         M("List All"),
                     ),
@@ -982,7 +980,7 @@ class S3OptionsMenu(object):
         return M()(
                     #M("Home", f="index"),
                     M("Warehouses", c="inv", f="warehouse")(
-                        M("Add Warehouse", m="create"),
+                        M("New", m="create"),
                         M("List All"),
                         M("Search", m="search"),
                         M("Import", m="import", p="create"),
@@ -1008,17 +1006,17 @@ class S3OptionsMenu(object):
                           m="search", vars=dict(report="rel")),
                     ),
                     M(inv_recv_list, c="inv", f="recv")(
-                        M("Add Received/Incoming Shipment", m="create"),
+                        M("New", m="create"),
                         M("List All"),
                         M("Search", m="search"),
                     ),
                     M("Sent Shipments", c="inv", f="send")(
-                        M("Add Sent Shipment", m="create"),
+                        M("New", m="create"),
                         M("List All"),
                         M("Search Shipped Items", f="track_item", m="search"),
                     ),
                     M("Items", c="supply", f="item")(
-                        M("Add Item", m="create"),
+                        M("New", m="create"),
                         M("List All"),
                         M("Search", f="catalog_item", m="search"),
                     ),
@@ -1029,7 +1027,7 @@ class S3OptionsMenu(object):
                        #M("Search", m="search"),
                     #),
                     M("Catalogs", c="supply", f="catalog")(
-                        M("Add Catalog", m="create"),
+                        M("New", m="create"),
                         M("List All"),
                         #M("Search", m="search"),
                     ),
@@ -1038,8 +1036,13 @@ class S3OptionsMenu(object):
                         M("New", m="create"),
                         M("List All"),
                     ),
+                    M("Facilities", c="inv", f="facility")(
+                        M("New", m="create"),
+                        M("List All"),
+                        #M("Search", m="search"),
+                    ),
                     M("Requests", c="req", f="req")(
-                        M("Request Items", m="create"),
+                        M("New", m="create"),
                         M("List All"),
                         M("Requested Items", f="req_item"),
                         #M("Search Requested Items", f="req_item", m="search"),
@@ -1076,6 +1079,24 @@ class S3OptionsMenu(object):
                     ),
                     M("Ushahidi Import", f="ireport", restrict=[ADMIN],
                       args="ushahidi")
+                )
+
+    # -------------------------------------------------------------------------
+    def cap(self):
+        """ CAP menu """
+
+        T = current.T
+
+        session = current.session
+        ADMIN = session.s3.system_roles.ADMIN
+
+        return M(c="cap")(
+                    M("List All Alerts", f="alert")(
+                        M("Create Alert", f="alert", m="create"),
+                        M("Create CAP Profile", f="profile", m="create"),
+                        M("Create CAP Template", f="template", m="template"),
+                        M("Search", m="search"),
+                    )
                 )
 
     # -------------------------------------------------------------------------
@@ -1198,6 +1219,12 @@ class S3OptionsMenu(object):
         return M(c="member")(
                     M("Members", f="membership")(
                         M("Add Member", m="create"),
+                        M("List All"),
+                        M("Search", m="search"),
+                        M("Import", f="person", m="import"),
+                    ),
+                    M("Membership Types", f="membership_type")(
+                        M("Add Membership Type", m="create"),
                         M("List All"),
                         M("Search", m="search"),
                         M("Import", f="person", m="import"),
@@ -1562,9 +1589,13 @@ class S3OptionsMenu(object):
         # and should therefore perhaps be replaced by a real path-check in
         # the main menu?
         if controller != "default":
-            breadcrumbs(
-                layout(all_modules[controller].name_nice, c=controller)
-            )
+            try:
+                breadcrumbs(
+                    layout(all_modules[controller].name_nice, c=controller)
+                )
+            except:
+                # Module not defined
+                pass
 
         # This checks the path in the options menu, omitting the top-level item
         # (because that's the menu itself which doesn't have a linked label):

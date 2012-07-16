@@ -15,100 +15,121 @@ class PRTests(unittest.TestCase):
     """ PR Tests """
 
     def setUp(self):
-        pass
+        """ Set up organisation records """
+
+        auth.override = True
+
+        otable = s3db.org_organisation
+
+        org1 = Storage(name="Test PR Organisation 1",
+                       acronym="TPO",
+                       country="UK",
+                       website="http://tpo.example.org")
+        org1_id = otable.insert(**org1)
+        org1.update(id=org1_id)
+        s3db.update_super(otable, org1)
+
+        org2 = Storage(name="Test PR Organisation 2",
+                       acronym="PTO",
+                       country="US",
+                       website="http://pto.example.com")
+        org2_id = otable.insert(**org2)
+        org2.update(id=org2_id)
+        s3db.update_super(otable, org2)
+
+        self.org1 = s3db.pr_get_pe_id("org_organisation", org1_id)
+        self.org2 = s3db.pr_get_pe_id("org_organisation", org2_id)
 
     def testGetRealmUsers(self):
 
-        try:
+        auth.s3_impersonate("admin@example.com")
+        admin_id = auth.user.id
+        admin_pe_id = auth.s3_user_pe_id(admin_id)
+        auth.s3_impersonate("normaluser@example.com")
+        user_id = auth.user.id
+        user_pe_id = auth.s3_user_pe_id(user_id)
+        auth.s3_impersonate(None)
 
-            auth.s3_impersonate("admin@example.com")
-            admin_id = auth.user.id
-            admin_pe_id = auth.s3_user_pe_id(admin_id)
-            auth.s3_impersonate("normaluser@example.com")
-            user_id = auth.user.id
-            user_pe_id = auth.s3_user_pe_id(user_id)
-            auth.s3_impersonate(None)
+        org1 = self.org1
+        org2 = self.org2
 
-            organisations = s3db.pr_get_entities(types="org_organisation", as_list=True, represent=False)
-            org1 = organisations[0]
-            org2 = organisations[1]
+        users = s3db.pr_realm_users(org1)
+        self.assertEqual(users, Storage())
 
-            users = s3db.pr_realm_users(org1)
-            self.assertEqual(users, Storage())
+        users = s3db.pr_realm_users(org2)
+        self.assertEqual(users, Storage())
 
-            users = s3db.pr_realm_users(org2)
-            self.assertEqual(users, Storage())
+        s3db.pr_add_affiliation(org1, admin_pe_id, role="Volunteer", role_type=9)
+        s3db.pr_add_affiliation(org2, user_pe_id, role="Staff")
 
-            s3db.pr_add_affiliation(org1, admin_pe_id, role="Volunteer", role_type=9)
-            s3db.pr_add_affiliation(org2, user_pe_id, role="Staff")
+        users = s3db.pr_realm_users(org1)
+        self.assertFalse(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users(org1)
-            self.assertFalse(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users(org2)
+        self.assertTrue(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users(org2)
-            self.assertTrue(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2])
+        self.assertTrue(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2])
-            self.assertTrue(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users(org1, roles="Volunteer")
+        self.assertFalse(user_id in users)
+        self.assertTrue(admin_id in users)
 
-            users = s3db.pr_realm_users(org1, roles="Volunteer")
-            self.assertFalse(user_id in users)
-            self.assertTrue(admin_id in users)
+        users = s3db.pr_realm_users(org2, roles="Volunteer")
+        self.assertFalse(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users(org2, roles="Volunteer")
-            self.assertFalse(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2], roles="Volunteer")
+        self.assertFalse(user_id in users)
+        self.assertTrue(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2], roles="Volunteer")
-            self.assertFalse(user_id in users)
-            self.assertTrue(admin_id in users)
+        users = s3db.pr_realm_users(org1, roles="Staff")
+        self.assertFalse(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users(org1, roles="Staff")
-            self.assertFalse(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users(org2, roles="Staff")
+        self.assertTrue(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users(org2, roles="Staff")
-            self.assertTrue(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2], roles="Staff")
+        self.assertTrue(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2], roles="Staff")
-            self.assertTrue(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2], roles=["Staff", "Volunteer"])
+        self.assertTrue(user_id in users)
+        self.assertTrue(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2], roles=["Staff", "Volunteer"])
-            self.assertTrue(user_id in users)
-            self.assertTrue(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2], role_types=1)
+        self.assertTrue(user_id in users)
+        self.assertFalse(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2], role_types=1)
-            self.assertTrue(user_id in users)
-            self.assertFalse(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2], role_types=9)
+        self.assertFalse(user_id in users)
+        self.assertTrue(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2], role_types=9)
-            self.assertFalse(user_id in users)
-            self.assertTrue(admin_id in users)
+        users = s3db.pr_realm_users([org1, org2], role_types=None)
+        self.assertTrue(user_id in users)
+        self.assertTrue(admin_id in users)
 
-            users = s3db.pr_realm_users([org1, org2], role_types=None)
-            self.assertTrue(user_id in users)
-            self.assertTrue(admin_id in users)
+        s3db.pr_remove_affiliation(org2, user_pe_id, role="Staff")
+        users = s3db.pr_realm_users([org1, org2], role_types=None)
+        self.assertFalse(user_id in users)
+        self.assertTrue(admin_id in users)
 
-            s3db.pr_remove_affiliation(org2, user_pe_id, role="Staff")
-            users = s3db.pr_realm_users([org1, org2], role_types=None)
-            self.assertFalse(user_id in users)
-            self.assertTrue(admin_id in users)
+        # None as realm should give a list of all current users
+        table = auth.settings.table_user
+        query = (table.deleted != True)
+        rows = db(query).select(table.id)
+        all_users = [row.id for row in rows]
+        users = s3db.pr_realm_users(None)
+        self.assertTrue(all([u in users for u in all_users]))
 
-            # None as realm should give a list of all current users
-            table = auth.settings.table_user
-            query = (table.deleted != True)
-            rows = db(query).select(table.id)
-            all_users = [row.id for row in rows]
-            users = s3db.pr_realm_users(None)
-            self.assertTrue(all([u in users for u in all_users]))
+    def tearDown(self):
 
-        finally:
-            db.rollback()
+        db.rollback()
 
 # =============================================================================
 class PersonDeduplicateTests(unittest.TestCase):
@@ -125,7 +146,7 @@ class PersonDeduplicateTests(unittest.TestCase):
                           date_of_birth = datetime.date(1974, 4, 13))
         person1_id = ptable.insert(**person1)
         person1.update(id=person1_id)
-        s3mgr.model.update_super(ptable, person1)
+        s3db.update_super(ptable, person1)
 
         self.person1_id = person1_id
         self.pe1_id = s3db.pr_get_pe_id(ptable, person1_id)
@@ -136,20 +157,20 @@ class PersonDeduplicateTests(unittest.TestCase):
                           date_of_birth = datetime.date(1974, 4, 23))
         person2_id = ptable.insert(**person2)
         person2.update(id=person2_id)
-        s3mgr.model.update_super(ptable, person2)
+        s3db.update_super(ptable, person2)
 
         self.person2_id = person2_id
         self.pe2_id = s3db.pr_get_pe_id(ptable, person2_id)
 
     def testHook(self):
 
-        deduplicate = s3mgr.model.get_config("pr_person", "deduplicate")
+        deduplicate = s3db.get_config("pr_person", "deduplicate")
         self.assertNotEqual(deduplicate, None)
         self.assertTrue(callable(deduplicate))
 
     def testMatchNames(self):
 
-        deduplicate = s3mgr.model.get_config("pr_person", "deduplicate")
+        deduplicate = s3db.get_config("pr_person", "deduplicate")
 
         # Test Match
         person = Storage(first_name = "Test",
@@ -169,7 +190,7 @@ class PersonDeduplicateTests(unittest.TestCase):
 
     def testMatchEmail(self):
 
-        deduplicate = s3mgr.model.get_config("pr_person", "deduplicate")
+        deduplicate = s3db.get_config("pr_person", "deduplicate")
 
         # Test without contact records in the DB
 
@@ -236,7 +257,7 @@ class PersonDeduplicateTests(unittest.TestCase):
 
     def testMatchInitials(self):
 
-        deduplicate = s3mgr.model.get_config("pr_person", "deduplicate")
+        deduplicate = s3db.get_config("pr_person", "deduplicate")
 
         # Insert contact records into the DB
         ctable = s3db.pr_contact
@@ -290,7 +311,7 @@ class PersonDeduplicateTests(unittest.TestCase):
 
     def testMatchDOB(self):
 
-        deduplicate = s3mgr.model.get_config("pr_person", "deduplicate")
+        deduplicate = s3db.get_config("pr_person", "deduplicate")
 
         # Insert contact records into the DB
         ctable = s3db.pr_contact

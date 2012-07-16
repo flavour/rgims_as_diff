@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
-"""
-    S3 Method Handler base class for the RESTful API
+""" S3 Method Handler base class for the RESTful API
 
     @see: U{B{I{S3XRC}} <http://eden.sahanafoundation.org/wiki/S3XRC>}
 
@@ -245,8 +244,7 @@ class S3Method(object):
             @param default: the default value
         """
 
-        manager = current.manager
-        return manager.model.get_config(self.tablename, key, default)
+        return current.s3db.get_config(self.tablename, key, default)
 
     # -------------------------------------------------------------------------
     @staticmethod
