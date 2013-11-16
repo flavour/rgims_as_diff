@@ -16,6 +16,7 @@ class index():
         T = current.T
         auth = current.auth
         db = current.db
+        s3db = current.s3db
         request = current.request
         appname = request.application
         response = current.response
@@ -34,12 +35,41 @@ class index():
         title = settings.get_system_name()
         response.title = title
 
-        # Menu Boxes
-        menu_btns = [#div, label, app, function
-                    ["sit", T("Request"), "req", "req"],
-                    ["dec", T("Send"), "inv", "send"],
-                    ["res", T("Receive"), "inv", "recv"]
-                    ]
+        # flag for the link change
+        # (condition, warehouse_id)
+        
+        flag = (False, 0)
+        
+        # change of link will happen
+        # if pe_id is part of the inv_warehouse
+        
+        wh_table = s3db.table('inv_warehouse')
+        
+        if wh_table:
+            auth_table = db((db.auth_membership.user_id == auth.user_id) &
+                (db.auth_membership.pe_id == wh_table.pe_id))
+        
+            for entity in auth_table.select(wh_table.id):
+                if entity.id:
+                    flag = (True, entity.id)
+                    
+                    break
+        
+        if flag[0]:
+            # Menu Boxes
+            menu_btns = [#div, label, app, function
+                        ["sit", T("Request"), "inv", "warehouse/%s/req" % flag[1]],
+                        ["dec", T("Send"), "inv", "warehouse/%s/send" % flag[1]],
+                        ["res", T("Receive"), "inv", "warehouse/%s/recv" % flag[1]]
+                        ]
+        
+        else:
+            # Menu Boxes
+            menu_btns = [#div, label, app, function
+                        ["sit", T("Request"), "req", "req"],
+                        ["dec", T("Send"), "inv", "send"],
+                        ["res", T("Receive"), "inv", "recv"]
+                        ]
 
         menu_divs = {"facility": DIV( H3("Map"),
                                   _id = "facility_box", _class = "menu_box"),

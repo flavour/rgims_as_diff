@@ -79,8 +79,8 @@ class S3RequestModel(S3Model):
         T = current.T
         db = current.db
         auth = current.auth
-        request = current.request
         session = current.session
+        settings = current.deployment_settings
 
         human_resource_id = self.hrm_human_resource_id
 
@@ -88,15 +88,11 @@ class S3RequestModel(S3Model):
         NONE = messages.NONE
         UNKNOWN_OPT = messages.UNKNOWN_OPT
 
+        s3_string_represent = lambda str: str if str else NONE
+
         add_component = self.add_component
         crud_strings = current.response.s3.crud_strings
         set_method = self.set_method
-
-        settings = current.deployment_settings
-        s3_date_format = settings.get_L10n_date_format()
-        s3_date_represent = lambda dt: S3DateTime.date_represent(dt, utc=True)
-        s3_datetime_represent = lambda dt: S3DateTime.datetime_represent(dt, utc=True)
-        s3_string_represent = lambda str: str if str else NONE
 
         # Multiple Item/Skill Types per Request?
         multiple_req_items = settings.get_req_multiple_req_items()
@@ -157,25 +153,13 @@ class S3RequestModel(S3Model):
                                             req_type_opts.get(opt, UNKNOWN_OPT),
                                         label = T("Request Type")),
                                   req_ref(),
-                                  Field("date", "datetime",
-                                        label = T("Date Requested"),
-                                        requires = [IS_EMPTY_OR(
-                                                    #IS_UTC_DATETIME_IN_RANGE(
-                                                    IS_DATE_IN_RANGE(
-                                                        #maximum=request.utcnow,
-                                                        maximum=request.utcnow.date(),
-                                                        error_message="%s %%(max)s!" %
-                                                            T("Enter a valid past date"),
-                                                        format=s3_date_format))],
-                                        # @ToDo: deployment_setting
-                                        #widget = S3DateTimeWidget(past=8760, # Hours, so 1 year
-                                        #                          future=0),
-                                        #represent = s3_datetime_represent
-                                        widget = S3DateWidget(past=12, # Months, so 1 year
-                                                              future=0),
-                                        represent = s3_date_represent,
-                                        default = request.utcnow,
-                                        ),
+                                  s3_datetime(label = T("Date Requested"),
+                                              default="now",
+                                              past=8760, # Hours, so 1 year
+                                              future=0,
+                                              represent="date",
+                                              widget="date",
+                                              ),
                                   Field("priority", "integer",
                                         default = 2,
                                         label = T("Priority"),
@@ -188,37 +172,20 @@ class S3RequestModel(S3Model):
                                         ),
                                   Field("purpose", "text",
                                         label=T("Purpose")), # Donations: What will the Items be used for?; People: Task Details
-                                  Field("date_required", "datetime",
-                                        label = T("Date Needed BY"),
-                                        requires = [IS_EMPTY_OR(
-                                                    #IS_UTC_DATETIME_IN_RANGE(
-                                                    IS_DATE_IN_RANGE(
-                                                      #minimum=request.utcnow - datetime.timedelta(days=1),
-                                                      minimum=request.utcnow.date() - datetime.timedelta(days=1),
-                                                      error_message="%s %%(min)s!" %
-                                                            T("Enter a valid past date"),
-                                                        format=s3_date_format))],
-                                        # @ToDo: deployment_setting
-                                        #widget = S3DateTimeWidget(past=0,
-                                        #                          future=8760), # Hours, so 1 year
-                                        #represent = s3_datetime_represent
-                                        widget = S3DateWidget(past=0,
-                                                              future=12), # Months, so 1 year
-                                        represent = s3_date_represent,
-                                        ),
-                                  Field("date_required_until", "datetime",
-                                        label = T("Date Required Until"),
-                                        requires = [IS_EMPTY_OR(
-                                                    IS_UTC_DATETIME_IN_RANGE(
-                                                        minimum=request.utcnow - datetime.timedelta(days=1),
-                                                        error_message="%s %%(min)s!" %
-                                                            T("Enter a valid future date")))],
-                                        widget = S3DateTimeWidget(past=0,
-                                                                  future=8760), # Hours, so 1 year
-                                        represent = s3_datetime_represent,
-                                        readable = False,
-                                        writable = False
-                                        ),
+                                  s3_datetime("date_required",
+                                              label = T("Date Needed By"),
+                                              past=0,
+                                              future=8760, # Hours, so 1 year
+                                              represent="date",
+                                              widget="date",
+                                              ),
+                                  s3_datetime("date_required_until",
+                                              label = T("Date Required Until"),
+                                              past=0,
+                                              future=8760, # Hours, so 1 year
+                                              readable = False,
+                                              writable = False
+                                              ),
                                   human_resource_id("requester_id",
                                                     label = T("Requester"),
                                                     empty = False,
@@ -243,17 +210,20 @@ class S3RequestModel(S3Model):
                                   # This is a component, so needs to be a super_link
                                   # - can't override field name, ondelete or requires
                                   self.super_link("site_id", "org_site",
-                                                   label = T("Requested For Facility"),
-                                                   default = auth.user.site_id if auth.is_logged_in() else None,
-                                                   readable = True,
-                                                   writable = True,
-                                                   empty = False,
-                                                   # Comment these to use a Dropdown & not an Autocomplete
-                                                   #widget = S3SiteAutocompleteWidget(),
-                                                   #comment = DIV(_class="tooltip",
-                                                   #              _title="%s|%s" % (T("Requested By Facility"),
-                                                   #                                T("Enter some characters to bring up a list of possible matches"))),
-                                                   represent = self.org_site_represent),
+                                                  label = T("Requested For Facility"),
+                                                  default = auth.user.site_id if auth.is_logged_in() else None,
+                                                  readable = True,
+                                                  writable = True,
+                                                  empty = False,
+                                                  instance_types = auth.org_site_types,
+                                                  updateable = True,
+                                                  # Comment these to use a Dropdown & not an Autocomplete
+                                                  widget = S3SiteAutocompleteWidget(),
+                                                  #comment = DIV(_class="tooltip",
+                                                  #              _title="%s|%s" % (T("Requested By Facility"),
+                                                  #                                T("Enter some characters to bring up a list of possible matches"))),
+                                                  represent = self.org_site_represent
+                                                  ),
                                   #Field("location",
                                   #      label = T("Neighborhood")),
                                   Field("transport_req", "boolean",
@@ -264,19 +234,13 @@ class S3RequestModel(S3Model):
                                         readable = False,
                                         writable = False,
                                         label = T("Security Required")),
-                                  Field("date_recv", "datetime",
-                                        label = T("Date Received"), # Could be T("Date Delivered") - make deployment_setting
-                                        requires = [IS_EMPTY_OR(
-                                                    IS_UTC_DATETIME_IN_RANGE(
-                                                        maximum=request.utcnow,
-                                                        error_message="%s %%(max)s!" %
-                                                             T("Enter a valid past date")))],
-                                        widget = S3DateTimeWidget(past=8760, # Hours, so 1 year
-                                                                  future=0),
-                                        represent = s3_datetime_represent,
-                                        readable = False,
-                                        writable = False
-                                        ),
+                                  s3_datetime("date_recv",
+                                              label = T("Date Received"), # Could be T("Date Delivered") - make deployment_setting
+                                              past=8760, # Hours, so 1 year
+                                              future=0,
+                                              readable = False,
+                                              writable = False
+                                              ),
                                   human_resource_id("recv_by_id",
                                                     label = T("Received By"),
                                                     # @ToDo: Set this in Update forms? Dedicated 'Receive' button?
@@ -467,6 +431,18 @@ $(function() {
             )
 
     # -------------------------------------------------------------------------
+    def defaults(self):
+        """
+            Safe defaults for model-global names in case module is disabled
+        """
+
+        req_ref = S3ReusableField("req_ref", "string",
+                                  readable=False, writable=False)
+        return Storage(
+                req_req_ref = req_ref
+            )
+
+    # -------------------------------------------------------------------------
     @staticmethod
     def req_create_form_mods():
         """
@@ -491,10 +467,10 @@ $(function() {
             Function to be called from REST prep functions
              - main module & components (sites)
         """
-        if not r.component:
+        if not r.component or r.component.name =="req":
             table = current.db.req_req
             default_type = table.type.default
-            if table.type.default:
+            if default_type:
                 req_submit_button = {1:T("Save and add Items"),
                                      3:T("Save and add People")}
                 current.manager.s3.crud.submit_button = req_submit_button[default_type]
@@ -582,7 +558,7 @@ $(function() {
                        "quantity_fulfil",
                       ]
 
-        exporter = r.resource.exporter.pdf
+        exporter = S3Exporter().pdf
         return exporter(r,
                         method = "list",
                         pdf_title = current.deployment_settings.get_req_form_name(),
@@ -628,13 +604,18 @@ $(function() {
             @ToDo: Roll these up like inv_tabs in inv.py
         """
 
-        if current.deployment_settings.has_module("req") and \
-            current.auth.s3_has_permission("read", "req_req"):
-            return [
-                    (T("Requests"), "req"),
-                    (T("Match Requests"), "req_match/"),
-                    (T("Commit"), "commit")
-                    ]
+        s3_has_permission = current.auth.s3_has_permission
+        settings = current.deployment_settings
+        if settings.has_module("req") and \
+           s3_has_permission("read", "req_req", c="req"):
+            tabs= [(T("Requests"), "req")]
+            if s3_has_permission("read", "req_req",
+                                 c=current.request.controller,
+                                 f="req_match"):
+                tabs.append((T("Match Requests"), "req_match/"))
+            if settings.get_req_use_commit():
+                tabs.append((T("Commit"), "commit"))
+            return tabs
         else:
             return []
 
@@ -782,19 +763,22 @@ $(function() {
         # If the req_ref is None then set it up
         id = form.vars.id
         if settings.get_req_use_req_number() and not rrtable[id].req_ref:
-            code = s3db.inv_get_shipping_code(current.deployment_settings.get_req_shortname(),
+            code = s3db.inv_get_shipping_code(settings.get_req_shortname(),
                                               rrtable[id].site_id,
                                               rrtable.req_ref,
                                              )
             db(rrtable.id == id).update(req_ref = code)
+
         # Configure the next page to go to based on the request type
         tablename = "req_req"
-        if "default_type" in request.get_vars:
-            type = request.get_vars.default_type
-        else:
-            type = form.vars.type
 
-        if type == "1" and settings.has_module("inv"):
+        if rrtable.type.default:
+            type = rrtable.type.default
+        elif "type" in form.vars:
+            type = int(form.vars.type)
+        else:
+            type = 1
+        if type == 1 and settings.has_module("inv"):
             s3db.configure(tablename,
                            create_next = URL(c="req",
                                              f="req",
@@ -802,7 +786,7 @@ $(function() {
                            update_next = URL(c="req",
                                              f="req",
                                              args=["[id]", "req_item"]))
-        elif type == "2" and settings.has_module("asset"):
+        elif type == 2 and settings.has_module("asset"):
             s3db.configure(tablename,
                            create_next = URL(c="req",
                                              f="req",
@@ -810,7 +794,7 @@ $(function() {
                            update_next = URL(c="req",
                                              f="req",
                                              args=["[id]", "req_asset"]))
-        elif type == "3" and settings.has_module("hrm"):
+        elif type == 3 and settings.has_module("hrm"):
             s3db.configure(tablename,
                            create_next = URL(c="req",
                                              f="req",
@@ -818,7 +802,7 @@ $(function() {
                            update_next = URL(c="req",
                                              f="req",
                                              args=["[id]", "req_skill"]))
-        #elif type == "4" and settings.has_module("cr"):
+        #elif type == 4 and settings.has_module("cr"):
         #    s3db.configure(tablename,
         #                   create_next = URL(c="req",
         #                                     f="req",
@@ -971,6 +955,7 @@ $(document).ready(function(){
 })'''),
                                         )
 
+        # -------------------------------------------------------------------------
 
         self.configure(tablename,
                        super_entity="supply_item_entity",
@@ -999,6 +984,17 @@ $(document).ready(function(){
         return Storage(
                 req_item_id = req_item_id,
                 req_item_represent = self.req_item_represent,
+            )
+
+    # -------------------------------------------------------------------------
+    def defaults(self):
+        """
+            Safe defaults for model-global names in case module is disabled
+        """
+        req_item_id = S3ReusableField("req_item_id", "integer",
+                                      readable=False, writable=False)
+        return Storage(
+                req_item_id = req_item_id
             )
 
     # -------------------------------------------------------------------------
@@ -1825,22 +1821,22 @@ def req_rheader(r, check_page = False):
                     site_name = s3db.org_site_represent(site_id, show_link = False)
                     commit_btn = TAG[""](
 # Removed to try and simplify the workflow - GF
-#                                A( T("Commit from %s") % site_name,
-#                                    _href = URL(c = "req",
-#                                                f = "commit_req",
-#                                                args = [r.id],
-#                                                vars = dict(site_id = site_id)
-#                                                ),
-#                                    _class = "action-btn"
-#                                   ),
-                                A( T("Send from %s") % site_name,
-                                    _href = URL(c = "req",
-                                                f = "send_req",
-                                                args = [r.id],
-                                                vars = dict(site_id = site_id)
-                                                ),
-                                    _class = "action-btn"
-                                   )
+#                                A(T("Commit from %s") % site_name,
+#                                   _href = URL(c = "req",
+#                                               f = "commit_req",
+#                                               args = [r.id],
+#                                               vars = dict(site_id = site_id)
+#                                               ),
+#                                   _class = "action-btn"
+#                                  ),
+                                A(T("Send from %s") % site_name,
+                                  _href = URL(c = "req",
+                                              f = "send_req",
+                                              args = [r.id],
+                                              vars = dict(site_id = site_id)
+                                              ),
+                                  _class = "action-btn"
+                                  )
                                 )
                 #else:
                 #    commit_btn = A( T("Commit"),
@@ -1853,25 +1849,33 @@ def req_rheader(r, check_page = False):
                 #                   )
                     s3.rfooter = commit_btn
 
+                site_id = record.site_id
+                if site_id:
+                    db = current.db
+                    stable = s3db.org_site
                 if settings.get_req_show_quantity_transit():
                     transit_status = req_status_opts.get(record.transit_status, "")
                     try:
-                        if record.transit_status in [REQ_STATUS_PARTIAL,REQ_STATUS_COMPLETE] and \
+                        if site_id and \
+                           record.transit_status in [REQ_STATUS_PARTIAL, REQ_STATUS_COMPLETE] and \
                            record.fulfil_status in [None, REQ_STATUS_NONE, REQ_STATUS_PARTIAL]:
-                            site_record = s3db.org_site[record.site_id]
-                            table = s3db[site_record.instance_type]
+                            site_record = db(stable.site_id == site_id).select(stable.uuid,
+                                                                               stable.instance_type,
+                                                                               limitby=(0, 1)).first()
+                            instance_type = site_record.instance_type
+                            table = s3db[instance_type]
                             query = (table.uuid == site_record.uuid)
                             id = db(query).select(table.id,
                                                   limitby=(0, 1)).first().id
-                            transit_status = SPAN( transit_status,
-                                                   "           ",
-                                                   A(T("Incoming Shipments"),
-                                                     _href = URL(c = site_record.instance_type.split("_")[0],
-                                                                 f = "incoming",
-                                                                 vars = {"viewing" : "%s.%s" % (site_record.instance_type, id)}
-                                                                 )
-                                                     )
-                                                   )
+                            transit_status = SPAN(transit_status,
+                                                  "           ",
+                                                  A(T("Incoming Shipments"),
+                                                    _href = URL(c = instance_type.split("_")[0],
+                                                                f = "incoming",
+                                                                vars = {"viewing" : "%s.%s" % (instance_type, id)}
+                                                                )
+                                                    )
+                                                  )
                     except:
                         pass
                     transit_status_cells = (TH( "%s: " % T("Transit Status")),
@@ -1879,53 +1883,50 @@ def req_rheader(r, check_page = False):
                 else:
                     transit_status_cells = ("", "")
 
-                table = r.table
-                site_id = record.site_id
-                org_id = s3db.org_site[site_id].organisation_id
-                logo = s3db.org_organisation_logo(org_id)
                 headerTR = TR(TD(settings.get_req_form_name(),
                                  _colspan=2, _class="pdf_title"),
-                              TD(logo, _colspan=2),
                               )
+                table = r.table
+
+                if site_id:
+                    org_id = db(stable.site_id == site_id).select(stable.organisation_id,
+                                                                  limitby=(0, 1)
+                                                                  ).first().organisation_id
+                    logo = s3db.org_organisation_logo(org_id)
+                    headerTR.append(TD(logo, _colspan=2))
+
                 if settings.get_req_use_req_number():
-                    headerTR = DIV(TR(
-                                     TH("%s: " % table.req_ref.label),
-                                     TD(table.req_ref.represent(record.req_ref))
-                                    )
-                                  )
+                    headerTR = DIV(TR(TH("%s: " % table.req_ref.label),
+                                      TD(table.req_ref.represent(record.req_ref))
+                                      )
+                                   )
                 if use_commit:
-                    row = TR(
-                                TH("%s: " % table.date_required.label),
-                                table.date_required.represent(record.date_required),
-                                TH( "%s: " % table.commit_status.label),
-                                table.commit_status.represent(record.commit_status),
-                                )
+                    row = TR(TH("%s: " % table.date_required.label),
+                             table.date_required.represent(record.date_required),
+                             TH("%s: " % table.commit_status.label),
+                             table.commit_status.represent(record.commit_status),
+                             )
                 else:
-                    row = TR(
-                                TH("%s: " % table.date_required.label),
-                                table.date_required.represent(record.date_required),
-                                )
-                rData = TABLE(
-                               headerTR,
-                               row,
-                               TR(
-                                TH( "%s: " % table.date.label),
-                                table.date.represent(record.date),
-                                *transit_status_cells
-                                ),
-                               TR(
-                                TH( "%s: " % table.site_id.label),
-                                table.site_id.represent(record.site_id),
-                                TH( "%s: " % table.fulfil_status.label),
-                                table.fulfil_status.represent(record.fulfil_status)
-                                ),
-                               TR(
-                                TH( "%s: " % table.comments.label),
-                                TD(record.comments or "", _colspan=3)
-                                ),
-                               )
-                rheader = DIV (rData,
-                               rheader_tabs,
+                    row = TR(TH("%s: " % table.date_required.label),
+                             table.date_required.represent(record.date_required),
+                             )
+                rData = TABLE(headerTR,
+                              row,
+                              TR(TH( "%s: " % table.date.label),
+                                 table.date.represent(record.date),
+                                 *transit_status_cells
+                                 ),
+                              TR(TH( "%s: " % table.site_id.label),
+                                 table.site_id.represent(site_id),
+                                 TH( "%s: " % table.fulfil_status.label),
+                                 table.fulfil_status.represent(record.fulfil_status)
+                                 ),
+                              TR(TH( "%s: " % table.comments.label),
+                                 TD(record.comments or "", _colspan=3)
+                                 ),
+                              )
+                rheader = DIV(rData,
+                              rheader_tabs,
                               )
                 return rheader
             #else:
@@ -1994,6 +1995,10 @@ def req_match():
 
     if tablename == "org_office":
         rheader = s3db.org_rheader
+    elif tablename == "org_facility":
+        rheader = s3db.org_facility_rheader
+    elif tablename == "inv_warehouse":
+        rheader = s3db.inv_warehouse_rheader
     elif tablename == "cr_shelter":
         rheader = s3db.cr_shelter_rheader
     elif tablename == "hms_hospital":
@@ -2003,10 +2008,17 @@ def req_match():
 
     s3.filter = (s3db.req_req.site_id != site_id)
     s3db.configure("req_req", insertable=False)
+
+    # Post-process
+    def postp(r, output):
+        if r.representation == "html":
+            output["title"] = s3.crud_strings[tablename].title_display
+        return output
+
+    s3.postp = postp
+
     output = current.rest_controller("req", "req", rheader = rheader)
 
-    if tablename == "org_office" and isinstance(output, dict):
-        output["title"] = T("Warehouse Details")
     return output
 
 # END =========================================================================

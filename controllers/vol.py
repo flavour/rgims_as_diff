@@ -69,7 +69,8 @@ def human_resource():
         if r.interactive:
             if not r.component:
                 s3_action_buttons(r, deletable=settings.get_hrm_deletable())
-                if "msg" in settings.modules:
+                if "msg" in settings.modules and \
+                   auth.permission.has_permission("update", c="hrm", f="compose"):
                     # @ToDo: Remove this now that we have it in Events?
                     s3.actions.append({
                         "url": URL(f="compose",
@@ -99,10 +100,9 @@ def volunteer():
     s3.filter = (_type == 2)
     _location = table.location_id
     _location.label = T("Home Address")
-    table.job_role_id.label = T("Volunteer Role")
     list_fields = ["id",
                    "person_id",
-                   "job_role_id",
+                   "job_title_id",
                    "organisation_id",
                    (settings.get_ui_label_mobile_phone(), "phone"),
                    "location_id",
@@ -110,23 +110,29 @@ def volunteer():
                    (T("Certificates"), "certificate"),
                    (T("Email"), "email"),
                   ]
-    report_options = s3db.get_config(tablename,
-                                     "report_options")
+    get_config = s3db.get_config
+    report_options = get_config(tablename,
+                                "report_options")
     # Remove inappropriate filters from the Search widget
-    human_resource_search = s3db.get_config(tablename,
-                                            "search_method")
+    human_resource_search = get_config(tablename,
+                                       "search_method")
     # Remove Facility
     human_resource_search.advanced.pop(5)
     if settings.get_hrm_vol_experience() == "programme":
+        enable_active_field = settings.set_org_dependent_field(None,
+                                                               tablename = "vol_volunteer",
+                                                               fieldname = "active")
         # Add Programme Virtual Fields
         table.virtualfields.append(s3db.hrm_programme_virtual_fields())
         # Add VF to List Fields
-        list_fields.insert(4, (T("Active?"), "active"))
+        if enable_active_field:
+            list_fields.insert(4, (T("Active?"), "active"))
         list_fields.insert(6, (T("Programme"), "programme"))
         # Add VF to Report Options
         report_fields = report_options.rows
         report_fields.append((T("Programme"), "programme"))
-        report_fields.append((T("Active?"), "active"))
+        if enable_active_field:
+            report_fields.append((T("Active?"), "active"))
         report_options.rows = report_fields
         report_options.cols = report_fields
         report_options.facts = report_fields
@@ -135,18 +141,19 @@ def volunteer():
         human_resource_search.advanced.pop(1)
         table.status.readable = False
         table.status.writable = False
-        widget = s3base.S3SearchOptionsWidget(
-                            name="human_resource_search_active",
-                            label=T("Active?"),
-                            field="active",
-                            cols = 2,
-                            options = {
-                                    T("Yes"):  T("Yes"),
-                                    T("No"): T("No")
-                                }
-                          ),
-        search_widget = ("human_resource_search_active", widget[0])
-        human_resource_search.advanced.insert(1, search_widget)
+        if enable_active_field:
+            widget = s3base.S3SearchOptionsWidget(
+                                name="human_resource_search_active",
+                                label=T("Active?"),
+                                field="active",
+                                cols = 2,
+                                options = {
+                                        T("Yes"):  T("Yes"),
+                                        T("No"): T("No")
+                                    }
+                              ),
+            search_widget = ("human_resource_search_active", widget[0])
+            human_resource_search.advanced.insert(1, search_widget)
 
         def hrm_programme_opts():
             """
@@ -187,6 +194,8 @@ def volunteer():
 
     def prep(r):
         if r.interactive:
+            table = r.table
+            table.person_id.widget = S3AddPersonWidget(controller="vol")
             if not r.component and \
                not r.id and \
                r.method in [None, "create"]:
@@ -197,11 +206,10 @@ def volunteer():
                 _type.default = 2
                 _location.writable = True
                 _location.readable = True
-                table = r.table
                 table.code.writable = False
                 table.code.readable = False
-                table.department.writable = False
-                table.department.readable = False
+                table.department_id.writable = False
+                table.department_id.readable = False
                 table.essential.writable = False
                 table.essential.readable = False
                 table.site_contact.writable = False
@@ -283,7 +291,6 @@ def person():
 
     configure = s3db.configure
     set_method = s3db.set_method
-    super_key = s3db.super_key
 
     # Custom Method for Contacts
     set_method("pr", resourcename,
@@ -415,7 +422,7 @@ def person():
                         query = (otable.name == org_name) & \
                                 (htable.organisation_id == otable.id) & \
                                 (htable.type == group)
-                        resource = s3mgr.define_resource("hrm", "human_resource", filter=query)
+                        resource = s3base.S3Resource("hrm_human_resource", filter=query)
                         ondelete = s3db.get_config("hrm_human_resource", "ondelete")
                         resource.delete(ondelete=ondelete, format="xml", cascade=True)
     s3mgr.import_prep = import_prep
@@ -425,14 +432,34 @@ def person():
         if r.representation == "s3json":
             s3mgr.show_ids = True
         elif r.interactive and r.method != "import":
-            if r.component:
+            if not r.component:
+                table = r.table
+                # Assume volunteers only between 12-81
+                table.date_of_birth.widget = S3DateWidget(past=972, future=-144)
+                table.occupation.label = T("Normal Job")
+                table.pe_label.readable = False
+                table.pe_label.writable = False
+                table.missing.readable = False
+                table.missing.writable = False
+                table.age_group.readable = False
+                table.age_group.writable = False
+
+                # Organisation Dependent Fields
+                set_org_dependent_field = deployment_settings.set_org_dependent_field
+                
+                person_details_table = s3db.pr_person_details
+                
+                set_org_dependent_field(person_details_table.father_name)
+                set_org_dependent_field(person_details_table.mother_name)
+                set_org_dependent_field(person_details_table.affiliations)
+                set_org_dependent_field(person_details_table.company)
+            else:
                 if r.component_name == "human_resource":
                     table = r.component.table
-                    table.job_role_id.label = T("Volunteer Role")
                     table.code.writable = False
                     table.code.readable = False
-                    table.department.writable = False
-                    table.department.readable = False
+                    table.department_id.writable = False
+                    table.department_id.readable = False
                     table.essential.writable = False
                     table.essential.readable = False
                     #table.location_id.readable = True
@@ -473,20 +500,6 @@ def person():
                               insertable = False,
                               editable = False,
                               deletable = False)
-            elif r.method == "contacts":
-                #s3.js_global.append('''controller="vol"''')
-                pass
-            else:
-                table = r.table
-                # Assume volunteers only between 12-81
-                table.date_of_birth.widget = S3DateWidget(past=972, future=-144)
-                table.occupation.label = T("Normal Job")
-                table.pe_label.readable = False
-                table.pe_label.writable = False
-                table.missing.readable = False
-                table.missing.writable = False
-                table.age_group.readable = False
-                table.age_group.writable = False
 
             resource = r.resource
             if mode is not None:
@@ -577,7 +590,12 @@ def person():
                                 rheader=s3db.hrm_rheader,
                                 orgname=orgname,
                                 replace_option=T("Remove existing data before import"),
-                                csv_stylesheet=("hrm", "person.xsl"))
+                                csv_stylesheet=("hrm", "person.xsl"),
+                                csv_extra_fields=[
+                                    dict(label="Type",
+                                         field=s3db.hrm_human_resource.type)
+                                                  ]
+                                )
     return output
 
 # -----------------------------------------------------------------------------
@@ -591,8 +609,8 @@ def person_search():
     s3.filter = (s3db.hrm_human_resource.type == 2)
 
     s3db.configure("hrm_human_resource",
-                    # S3HRSearch
-                    search_method = s3db.hrm_autocomplete_search,
+                   # S3HRSearch
+                   search_method = s3db.hrm_autocomplete_search,
                    )
     s3.prep = lambda r: r.representation == "json" and \
                         r.method == "search"
@@ -659,15 +677,16 @@ def group():
         msg_record_deleted = T("Membership deleted"),
         msg_list_empty = T("No Members currently registered"))
 
-    s3db.configure(tablename, main="name", extra="description",
-                    # Redirect to member list when a new group has been created
-                    create_next = URL(f="group",
-                                      args=["[id]", "group_membership"]))
-    s3db.configure("pr_group_membership",
-                    list_fields=["id",
-                                 "person_id",
-                                 "group_head",
-                                 "description"])
+    configure = s3db.configure
+    configure(tablename, main="name", extra="description",
+              # Redirect to member list when a new group has been created
+              create_next = URL(f="group",
+                                args=["[id]", "group_membership"]))
+    configure("pr_group_membership",
+              list_fields=["id",
+                           "person_id",
+                           "group_head",
+                           "description"])
 
     # Post-process
     def postp(r, output):
@@ -678,7 +697,7 @@ def group():
                 s3_action_buttons(r, deletable=False, update_url=update_url)
                 if "msg" in settings.modules:
                     s3.actions.append({
-                        "url": URL(f="compose",
+                        "url": URL(f = "compose",
                                    vars = {"group_id": "[id]"}),
                         "_class": "action-btn",
                         "label": str(T("Send Notification"))})
@@ -703,8 +722,34 @@ def group():
 # =============================================================================
 # Jobs
 # =============================================================================
+def department():
+    """ Departments Controller """
+
+    mode = session.s3.hrm.mode
+    def prep(r):
+        if mode is not None:
+            r.error(403, message=auth.permission.INSUFFICIENT_PRIVILEGES)
+        return True
+    s3.prep = prep
+
+    output = s3_rest_controller("hrm", resourcename)
+    return output
+
 def job_role():
     """ Job Roles Controller """
+
+    mode = session.s3.hrm.mode
+    def prep(r):
+        if mode is not None:
+            r.error(403, message=auth.permission.INSUFFICIENT_PRIVILEGES)
+        return True
+    s3.prep = prep
+
+    output = s3_rest_controller("hrm", resourcename)
+    return output
+
+def job_title():
+    """ Job Titles Controller """
 
     mode = session.s3.hrm.mode
     def prep(r):

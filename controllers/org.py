@@ -10,7 +10,7 @@ resourcename = request.function
 if not deployment_settings.has_module(module):
     raise HTTP(404, body="Module disabled: %s" % module)
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def index():
     """ Module's Home Page """
 
@@ -18,9 +18,16 @@ def index():
     response.title = module_name
     return dict(module_name=module_name)
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def sector():
     """ RESTful CRUD controller """
+
+    # Pre-processor
+    def prep(r):
+        # Location Filter
+        s3db.gis_location_filter(r)
+        return True
+    s3.prep = prep
 
     return s3_rest_controller()
 
@@ -30,19 +37,31 @@ def subsector():
 
     return s3_rest_controller()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def site():
-    """ RESTful CRUD controller """
+    """
+        RESTful CRUD controller
+        - used by S3SiteAutocompleteWidget(), which doesn't yet support filtering
+                                              to just updateable sites
+    """
+
+    # Pre-processor
+    def prep(r):
+        # Location Filter
+        s3db.gis_location_filter(r)
+        return True
+    s3.prep = prep
 
     return s3_rest_controller()
 
 # -----------------------------------------------------------------------------
 def site_org_json():
+    """
+    """
 
     table = s3db.org_site
     otable = s3db.org_organisation
     response.headers["Content-Type"] = "application/json"
-    #db.req_commit.date.represent = lambda dt: dt[:10]
     query = (table.site_id == request.args[0]) & \
             (table.organisation_id == otable.id)
     records = db(query).select(otable.id,
@@ -52,14 +71,27 @@ def site_org_json():
 # -----------------------------------------------------------------------------
 def facility():
     """ RESTful CRUD controller """
+    
+    # Pre-processor
+    def prep(r):
+        # Location Filter
+        s3db.gis_location_filter(r)
 
-    # remove CRUD generated buttons in the tabs
-    s3db.configure("inv_inv_item",
-                    create=False,
-                    listadd=False,
-                    editable=False,
-                    deletable=False,
-                   )
+        if r.interactive:
+            if r.component:
+                # remove CRUD generated buttons in the tabs
+                s3db.configure("inv_inv_item",
+                               create=False,
+                               listadd=False,
+                               editable=False,
+                               deletable=False,
+                               )
+            elif r.method == "update":
+                field = r.table.obsolete
+                field.readable = field.writable = True
+        return True
+    s3.prep = prep
+
     return s3_rest_controller()
 
 # -----------------------------------------------------------------------------
@@ -68,7 +100,13 @@ def facility_type():
 
     return s3_rest_controller()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+def office_type():
+    """ RESTful CRUD controller """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
 def organisation_type():
     """ RESTful CRUD controller """
 
@@ -80,6 +118,18 @@ def organisation():
 
     # Defined in the Model for use from Multiple Controllers for unified menus
     return s3db.org_organisation_controller()
+
+# -----------------------------------------------------------------------------
+def org_search():
+    """
+        Organisation REST controller
+        - limited to just search.json for use in Autocompletes
+        - allows differential access permissions
+    """
+
+    s3.prep = lambda r: r.representation == "json" and \
+                        r.method == "search"
+    return s3_rest_controller(module, "organisation")
 
 # -----------------------------------------------------------------------------
 def organisation_list_represent(l):
@@ -102,14 +152,14 @@ def organisation_list_represent(l):
     else:
         return NONE
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def office():
     """ RESTful CRUD controller """
 
     # Defined in the Model for use from Multiple Controllers for unified menus
     return s3db.org_office_controller()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def person():
     """ Person controller for AddPersonWidget """
 
@@ -120,17 +170,17 @@ def person():
         else:
             s3mgr.show_ids = True
         return True
-    response.s3.prep = prep
+    s3.prep = prep
 
     return s3_rest_controller("pr", "person")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def room():
     """ RESTful CRUD controller """
 
     return s3_rest_controller()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def mailing_list():
     """ RESTful CRUD controller """
 
@@ -170,19 +220,7 @@ def mailing_list():
                               "group",
                               rheader=rheader)
 
-# =============================================================================
-def incoming():
-    """ Incoming Shipments """
-
-    return inv_incoming()
-
-# =============================================================================
-def match():
-    """ Match Requests """
-
-    return s3db.req_match()
-
-# =============================================================================
+# -----------------------------------------------------------------------------
 def donor():
     """ RESTful CRUD controller """
 
@@ -210,9 +248,20 @@ def donor():
 
     return output
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 def req_match():
-    """ Match Requests """
+    """ Match Requests for Sites """
 
     return s3db.req_match()
+
+# -----------------------------------------------------------------------------
+def incoming():
+    """
+        Incoming Shipments for Sites
+
+        @unused
+    """
+
+    return inv_incoming()
+
 # END =========================================================================

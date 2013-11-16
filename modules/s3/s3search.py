@@ -2,10 +2,10 @@
 
 """ RESTful Search Methods
 
-    @requires: U{B{I{gluon}} <http://web2py.com>}
-
     @copyright: 2009-2012 (c) Sahana Software Foundation
     @license: MIT
+
+    @requires: U{B{I{gluon}} <http://web2py.com>}
 
     Permission is hereby granted, free of charge, to any person
     obtaining a copy of this software and associated documentation
@@ -30,6 +30,7 @@
 """
 
 import re
+import string
 
 try:
     import json # try stdlib (Python 2.6)
@@ -42,14 +43,16 @@ except ImportError:
 from gluon import *
 from gluon.serializers import json as jsons
 from gluon.storage import Storage
+from gluon.html import BUTTON
 
 from s3crud import S3CRUD
 from s3navigation import s3_search_tabs
-from s3utils import s3_debug, S3DateTime, s3_get_foreign_key
+from s3utils import S3DateTime, s3_get_foreign_key, s3_unicode
 from s3validators import *
-from s3widgets import CheckboxesWidgetS3, S3OrganisationHierarchyWidget
+from s3widgets import S3OrganisationHierarchyWidget, s3_grouped_checkboxes_widget
+from s3export import S3Exporter
 
-from s3resource import S3FieldSelector
+from s3resource import S3FieldSelector, S3Resource
 
 __all__ = ["S3SearchWidget",
            "S3SearchSimpleWidget",
@@ -267,9 +270,8 @@ class S3SearchSimpleWidget(S3SearchWidget):
 
         self.name = attr._name
 
-
         # Search Autocomplete - Display current value
-        attr["_value"] = value
+        attr["_value"] = vars.get(self.name, value) if vars else value
 
         return INPUT(**attr)
 
@@ -522,22 +524,14 @@ class S3SearchOptionsWidget(S3SearchWidget):
             If the field is entered as kfield$field, will search field in the
             the referenced resource.
         """
-        field = self.field
-        if field.find("$") != -1:
-            is_component = True
-            try:
-                kfield, field = field.split("$")
-            except:
-                # @ToDo: Support multiple levels of components
-                raise NotImplementedError
-            tablename = resource.table[kfield].type[10:]
-            prefix, resource_name = tablename.split("_", 1)
-            resource = current.manager.define_resource(prefix,
-                                                       resource_name)
-        else:
-            kfield = None
+        field_name = self.field
+        kfield_name = None
 
-        return resource, field, kfield
+        if field_name.find("$") != -1:
+            kfield_name, field_name = field_name.split("$")
+            tablename = resource.table[kfield_name].type[10:]
+            resource = S3Resource(tablename)
+        return resource, field_name, kfield_name
 
     # -------------------------------------------------------------------------
     def widget(self, resource, vars):
@@ -547,14 +541,15 @@ class S3SearchOptionsWidget(S3SearchWidget):
             @param resource: the resource to search in
             @param vars: the URL GET variables as dict
         """
+        T = current.T
 
-        resource, field_name, kfield = self._get_reference_resource(resource)
+        #resource, field_name, kfield_name = self._get_reference_resource(resource)
+        field_name = self.field
 
         attr = self.attr
-        if "_name" not in attr:
-            attr.update(_name="%s_search_select_%s" % (resource.name,
-                                                       field_name))
-        self.name = attr._name
+        self.name = attr.pop("_name",
+                             "%s_search_select_%s" % (resource.name,
+                                                      field_name))
 
         if "location_level" in attr:
             # This is searching a Location Hierarchy, so lookup the label now
@@ -572,72 +567,75 @@ class S3SearchOptionsWidget(S3SearchWidget):
         else:
             value = None
 
+        fs = S3FieldSelector(field_name)
+        fl = fs.resolve(resource)
+        field = fl.field
+
         # Check the field type
-        try:
-            field = resource.table[field_name]
-        except:
-            field_type = "virtual"
-        else:
+        if field is not None:
             field_type = str(field.type)
+        else:
+            field_type = "virtual"
 
-
-        opt_keys = []
-        opt_list = []
 
         if self.options is not None:
+            # Custom dict of options {value: label} or callable
             if isinstance(self.options, dict):
                 options = self.options
-                opt_keys = options.keys()
-                opt_list = options.items()
             elif callable(self.options):
                 options = self.options()
-                opt_keys = options.keys()
-                opt_list = options.items()
-        elif field_type == "virtual":
-            # Need to specify options
-            raise NotImplementedError
+
+            opt_values = options.keys()
         else:
             if field_type == "boolean":
-                opt_keys = (True, False)
+                opt_values = (True, False)
             else:
-                # Find unique values of options for that field
-                rows = resource.select(field, groupby=field)
-                if field_type.startswith("list"):
-                    for row in rows:
-                        rfield = row[field_name]
-                        if rfield != None:
-                            try:
-                                _opt_keys = rfield.split("|")
-                            except:
-                                _opt_keys = rfield
-                            for opt_key in _opt_keys:
-                                opt_keys.append(opt_key)
-                else:
-                    opt_keys = [row[field_name] for row
-                                                in rows
-                                                if row[field_name] != None]
+                opt_values = []
+                rows = resource.select(fields=[field_name],
+                                       start=None,
+                                       limit=None,
+                                       orderby=field)
+                if rows:
+                    if field_type.startswith("list"):
+                        for row in rows:
+                            fk_list = row[field]
+                            if fk_list != None:
+                                try:
+                                    fkeys = fk_list.split("|")
+                                except:
+                                    fkeys = fk_list
+                                for fkey in fkeys:
+                                    if fkey not in opt_values:
+                                        opt_values.append(fkey)
+                    else:
+                        opt_values = list(set([row[field]
+                                               for row in rows
+                                               if row[field] is not None]))
 
-        if opt_keys == []:
-            msg = attr.get("_no_opts", current.T("No options available"))
+        if len(opt_values) < 2:
+            msg = attr.get("_no_opts", T("No options available"))
             return SPAN(msg, _class="no-options-available")
 
         if self.options is None:
+            opt_list = []
+
             # Always use the represent of the widget, if present
             represent = attr.represent
+
             # Fallback to the field's represent
             if not represent or field_type[:9] != "reference":
                 represent = field.represent
 
-            # Execute, if callable
             if callable(represent):
+                # Execute, if callable
                 if "show_link" in represent.func_code.co_varnames:
-                    opt_list = [(opt_key, represent(opt_key, show_link=False)) for opt_key
-                                                                               in opt_keys]
+                    opt_list = [(opt_value, represent(opt_value, show_link=False)) for opt_value
+                                                                                   in opt_values]
                 else:
-                    opt_list = [(opt_key, represent(opt_key)) for opt_key
-                                                              in opt_keys]
-            # Otherwise, feed the format string
+                    opt_list = [(opt_value, represent(opt_value)) for opt_value
+                                                                  in opt_values]
             elif isinstance(represent, str) and field_type[:9] == "reference":
+                # Feed the format string
                 # Use the represent string to reduce db calls
                 # Find the fields which are needed to represent:
                 db = current.db
@@ -645,136 +643,55 @@ class S3SearchOptionsWidget(S3SearchWidget):
                 fieldnames = ["id"]
                 fieldnames += re.findall("%\(([a-zA-Z0-9_]*)\)s", represent)
                 represent_fields = [ktable[fieldname] for fieldname in fieldnames]
-                query = (ktable.id.belongs(opt_keys)) & (ktable.deleted == False)
+                query = (ktable.id.belongs(opt_values)) & (ktable.deleted == False)
                 represent_rows = db(query).select(*represent_fields).as_dict(key=represent_fields[0].name)
                 opt_list = []
-                for opt_key in opt_keys:
-                    opt_represent = represent % represent_rows[opt_key]
+                for opt_value in opt_values:
+                    opt_represent = represent % represent_rows[opt_value]
                     if opt_represent:
-                        opt_list.append([opt_key, opt_represent])
+                        opt_list.append([opt_value, opt_represent])
             else:
-                opt_list = [(opt_key, "%s" % opt_key) for opt_key in opt_keys if opt_key]
-
-            if self.null:
-                # Add null value
-                opt_list.append((None, self.null))
-
-            # Alphabetise (this will not work as it is converted to a dict),
-            # look at IS_IN_SET validator or CheckboxesWidget to ensure
-            # that the list opt_list.sort()
+                # Straight string representations of the values
+                opt_list = [(opt_value, s3_unicode(opt_value))
+                            for opt_value in opt_values if opt_value]
 
             options = dict(opt_list)
 
         # Dummy field
-        opt_field = Storage(name=self.name,
-                            requires=IS_IN_SET(options,
-                                               multiple=True))
-        MAX_OPTIONS = 20
-        if len(opt_list) > MAX_OPTIONS:
-            # Collapse list Alphabetically into letter headers
-            # Could this functionality be implemented in a custom
-            # CheckboxesWidget?
+        dummy_field = Storage(name=self.name,
+                              type=field_type,
+                              requires=IS_IN_SET(options,
+                                                 multiple=True))
 
-            # Split opt_list into a dict with the letter as keys
-            # letter_options = { "A" : [ ( n, "A..."),
-            #                            ( n, "A..."),
-            #                            ...
-            #                            ],
-            #                    "B" : [ ( n, "B..."),
-            #                            ( n, "B..."),
-            #                            ...
-            #                            ],
-            #                     ...
-            #                    }
-            # and create a list of letters
-            letters = []
-            letter_options = {}
-            for key, label in opt_list:
-                letter = label and label[0]
-                if letter:
-                    letter = letter.upper()
-                    if letter not in letter_options:
-                        letters.append(letter)
-                        letter_options[letter] = [(key, label)]
-                    else:
-                        letter_options[letter].append((key, label))
-
-            # Ensure that letters contains A & Z
-            # (For usability to ensure that the complete range is displayed)
-            letters.sort()
-            if letters[0] != "A":
-                letters.insert(0, "A")
-            if letters[-1] != "Z":
-                letters.append("Z")
-
-            # Build widget
-            widget = DIV()
-            count = 0
-            options = []
-            requires = IS_IN_SET(opt_list, multiple=True)
-
-            from_letter = None
-            to_letter = None
-            for letter in letters:
-                if not from_letter:
-                    from_letter = letter
-                letter_option = letter_options.get(letter, [])
-                count += len(letter_option)
-                # Check if the number of options is > MAX_OPTIONS
-                if count > MAX_OPTIONS or letter == "Z":
-                    if not options:
-                        options = letter_option
-
-                    if letter == "Z":
-                        to_letter = "Z"
-                    # Are these options for a single letter or a range?
-                    if to_letter != from_letter:
-                        _letter = "%s - %s" % (from_letter, to_letter)
-                    else:
-                        _letter = from_letter
-                    # Letter Label
-                    widget.append(DIV(_letter,
-                                      _id="%s_search_select_%s_label_%s" %
-                                                (resource.name,
-                                                 field_name,
-                                                 from_letter),
-                                      _class="search_select_letter_label"))
-
-                    opt_field = Storage(name=self.name,
-                                        requires=IS_IN_SET(options,
-                                                           multiple=True))
-                    if attr.cols:
-                        letter_widget = CheckboxesWidgetS3.widget(opt_field,
-                                                                  value,
-                                                                  cols=attr.cols,
-                                                                  requires=requires,
-                                                                  _class="search_select_letter_widget")
-                    else:
-                        letter_widget = CheckboxesWidgetS3.widget(opt_field, value,
-                                                                  _class="search_select_letter_widget")
-
-                    widget.append(letter_widget)
-
-                    count = 0
-                    options = []
-                    from_letter = letter
-                options += letter_option
-                to_letter = letter
-
+        # on many-to-many fields the user can search for records containing
+        # all the options or any of the options.
+        if len(options) > 1 and field_type[:4] == "list":
+            self.filter_type = vars.get("%s_filter" % self.name, "any")
+            any_all = DIV(
+                T("Filter type "),
+                INPUT(_name="%s_filter" % self.name,
+                      _id="%s_filter_all" % self.name,
+                      _type="radio",
+                      _value="all",
+                      value=self.filter_type),
+                LABEL(T("All"),
+                      _for="%s_filter_all" % self.name),
+                INPUT(_name="%s_filter" % self.name,
+                      _id="%s_filter_any" % self.name,
+                      _type="radio",
+                      _value="any",
+                      value=self.filter_type),
+                LABEL(T("Any"),
+                      _for="%s_filter_any" % self.name),
+                _class="s3-checkboxes-widget-filter"
+            )
         else:
-            try:
-                if attr.cols:
-                    widget = CheckboxesWidgetS3.widget(opt_field,
-                                                       value,
-                                                       cols=attr.cols)
-                else:
-                    widget = CheckboxesWidgetS3.widget(opt_field,
-                                                       value)
-            except:
-                # Some versions of gluon/sqlhtml.py don't support
-                # non-integer keys
-                return None
-        return widget
+            any_all = ""
+
+        return TAG[""](any_all,
+                       s3_grouped_checkboxes_widget(dummy_field,
+                                                    value,
+                                                    **attr))
 
     # -------------------------------------------------------------------------
     def query(self, resource, value):
@@ -785,29 +702,42 @@ class S3SearchOptionsWidget(S3SearchWidget):
             @param value: the value returned from the widget
         """
 
+        field_name = self.field
+
         if value:
             if not isinstance(value, (list, tuple)):
                 value = [value]
 
+            fs = S3FieldSelector(field_name)
+            fl = fs.resolve(resource)
             try:
-                table_field = resource.table[self.field]
+                #table_field = resource.table[field_name]
+                table_field = fl.field
             except:
                 table_field = None
 
+            # What do we do if we need to search within a virtual field
+            # that is a list:* ?
             if table_field and str(table_field.type).startswith("list"):
-                query = S3FieldSelector(self.field).contains(value)
+                 query = None
+
+                 if self.filter_type == "any":
+                     query = S3FieldSelector(field_name).anyof(value)
+                 else:
+                     query = S3FieldSelector(field_name).contains(value)
             elif "None" in value:
                 # Needs special handling (doesn't show up in 'belongs')
-                query = S3FieldSelector(self.field) == None
+                query = S3FieldSelector(field_name) == None
                 opts = [v for v in value if v != "None"]
                 if opts:
-                    query = query | S3FieldSelector(self.field).belongs(opts)
+                    query = query | S3FieldSelector(field_name).belongs(opts)
             else:
-                query = S3FieldSelector(self.field).belongs(value)
+                query = S3FieldSelector(field_name).belongs(value)
 
             return query
         else:
             return None
+
 
 # =============================================================================
 class S3SearchLocationWidget(S3SearchWidget):
@@ -848,6 +778,7 @@ class S3SearchLocationWidget(S3SearchWidget):
         try:
             from shapely.wkt import loads as wkt_loads
         except ImportError:
+            from s3utils import s3_debug
             s3_debug("WARNING: %s: Shapely GIS library not installed" % __name__)
             return None
 
@@ -872,17 +803,19 @@ class S3SearchLocationWidget(S3SearchWidget):
 
         # Button to open the Map
         OPEN_MAP = T("Open Map")
-        map_button = A(OPEN_MAP,
-                       _style="cursor:pointer; cursor:hand",
-                       _id="gis_search_map-btn")
+        CLEAR_MAP = T("Clear selection")
+        map_buttons = TAG[""](BUTTON(OPEN_MAP,
+                                     _id="gis_search_map-btn"),
+                              BUTTON(CLEAR_MAP,
+                                     _id="gis_search_polygon_input_clear"))
 
         # Settings to be read by static/scripts/S3/s3.gis.js
-        js_location_search = """S3.gis.draw_polygon = true;"""
+        js_location_search = '''S3.gis.draw_polygon=true'''
 
         # The overall layout of the components
         return TAG[""](
                         polygon_input,
-                        map_button,
+                        map_buttons,
                         #map_popup,
                         SCRIPT(js_location_search)
                       )
@@ -907,6 +840,7 @@ class S3SearchLocationWidget(S3SearchWidget):
             try:
                 shape = wkt_loads(value)
             except:
+                from s3utils import s3_debug
                 s3_debug("WARNING: S3Search: Invalid WKT")
                 return None
 
@@ -935,7 +869,7 @@ class S3SearchCredentialsWidget(S3SearchOptionsWidget):
     """
 
     def widget(self, resource, vars):
-        c = current.manager.define_resource("hrm", "credential")
+        c = S3Resource("hrm_credential")
         return S3SearchOptionsWidget.widget(self, c, vars)
 
     # -------------------------------------------------------------------------
@@ -969,7 +903,7 @@ class S3SearchSkillsWidget(S3SearchOptionsWidget):
 
     # -------------------------------------------------------------------------
     def widget(self, resource, vars):
-        c = current.manager.define_resource("hrm", "competency")
+        c = S3Resource("hrm_competency")
         return S3SearchOptionsWidget.widget(self, c, vars)
 
     # -------------------------------------------------------------------------
@@ -1084,14 +1018,8 @@ class S3Search(S3CRUD):
         elif "is_autocomplete" in attr:
             output = self.search_autocomplete(r, **attr)
 
-        # Save search
-        elif "save" in r.vars :
-            r.interactive = False
-            output = self.save_search(r, **attr)
-
         # Interactive or saved search
-        elif "load" in r.vars or \
-                r.interactive and self.__interactive:
+        elif r.interactive and self.__interactive:
             output = self.search_interactive(r, **attr)
 
         # SSPag response => CRUD native
@@ -1109,6 +1037,9 @@ class S3Search(S3CRUD):
         # Search form for popup on Map Layers
         elif format == "plain":
             output = self.search_interactive(r, **attr)
+
+        elif format == "email":
+            output = self.email(r, **attr)
 
         # Not supported
         else:
@@ -1147,109 +1078,166 @@ class S3Search(S3CRUD):
         return (query, errors)
 
     # -------------------------------------------------------------------------
-    def save_search_widget(self, r, search_vars, **attr):
+    def save_search_widget(self, r, query, **attr):
         """
             Add a widget to a Search form to allow saving this search to the
             user's profile, to which they can subscribe
         """
 
+        import urllib
+
         T = current.T
-        db = current.db
-        request = self.request
 
-        user_id = current.session.auth.user.id
-        now = request.utcnow.microsecond
-        save_search_btn_id = "save_my_filter_btn_%s" % now
-        save_search_processing_id = "save_search_processing_%s" % now
-        save_search_a_id = "save_search_a_%s" % now
-        arg = "%s/save_search" % user_id
-        save_search_a = DIV(T("View and Subscribe to Saved Searches"),
-                            A(T("Here"),
-                              _href=URL(r=request, c="pr", f="person",
-                                        args=[arg]),
-                              _target="_blank"
-                             ),
-                            ".",
-                        _id=save_search_a_id,
-                        _class="save_search_a"
-                        )
-        search_vars["prefix"] = r.controller
-        search_vars["function"] = r.function
+        person_id = current.auth.s3_logged_in_person()
+        resource = self.resource
 
-        table = current.s3db.pr_save_search
-        rows = db(table.user_id == user_id).select(table.ALL)
-        if rows:
-            import cPickle
-            for row in rows:
-                pat = "_"
-                s_v = cPickle.loads(row.search_vars)
-                if ((search_vars["prefix"] == s_v["prefix"]) and \
-                    (search_vars["function"] == s_v["function"])):
-                    s_dict = s_v["criteria"]
-                    if "criteria" in search_vars:
-                        c_dict = search_vars["criteria"]
-                    else:
-                        break
-                    diff = [ k for k in c_dict if k not in s_dict ]
-                    if not len(diff):
-                        flag = 1
-                        for j in s_dict.iterkeys():
-                            if not re.match(pat, j):
-                                if c_dict[j] != s_dict[j]:
-                                    flag = 0
-                                    break
-                        if flag == 1:
-                            return DIV(save_search_a,
-                                       _style="font-size:12px;padding:5px 0px 5px 90px;",
-                                       _id="save_search"
-                                       )
+        save_options = {
+            "url": URL(c="pr", f="saved_search", vars={"format": "s3json"}),
+            "url_detail": URL(c="pr", f="person", args=[person_id, "saved_search", "<id>", "update"]),
+            "data": json.dumps({
+                "$_pr_saved_search": [
+                    {
+                        "controller": r.controller,
+                        "function": r.function,
+                        "prefix": resource.prefix,
+                        "resource_name": resource.name,
+                        "url": r.url(
+                            # Can't use the search method handler because then
+                            # we can't get different formats
+                            method = "search", # want to see search form
+                            vars = query.serialize_url(resource),
+                        ),
+                        "filters": urllib.urlencode(query.serialize_url(resource)),
+                    },
+                ],
+            }),
+        }
 
-        save_search_btn = A("Save Search",
-                            _class="save_search_btn",
-                            _id=save_search_btn_id,
-                            _href="#",
-                            _title=T("Save this search"))
-        save_search_a["_style"] = "display:none;"
-        save_search_processing = IMG(_src="/%s/static/img/ajax-loader.gif" % request.application,
-                                    _id=save_search_processing_id,
-                                    _class="save_search_processing_id",
-                                    _style="display:none;"
-                                    )
-        s_var = {}
-        s_var["save"] = True
-        jurl = URL(r=request, c=r.controller, f=r.function,
-                   args=["search"], vars=s_var)
-        save_search_script = \
-'''$('#%s').live('click',function(){
- $('#%s').show()
- $('#%s').hide()
- $.ajax({
-  url:'%s',
-  data:'%s',
-  success:function(data){
-   $('#%s').show()
-   $('#%s').hide()
-  },
-  type:'POST'
- })
- return false
-})''' % (save_search_btn_id,
-         save_search_processing_id,
-         save_search_btn_id,
-         jurl,
-         json.dumps(search_vars),
-         save_search_a_id,
-         save_search_processing_id)
+        widget = TAG[""](BUTTON(T("Save this search"),
+                                _id="save-search"),
+                         SCRIPT('''
+S3.search.saveOptions=%s
+S3.i18n.edit_saved_search="%s"
+''' % (json.dumps(save_options),
+       T("Edit saved search"))))
 
-        current.response.s3.jquery_ready.append(save_search_script)
-
-        widget = DIV(save_search_processing,
-                     save_search_a,
-                     save_search_btn,
-                     _style="font-size:12px;padding:5px 0px 5px 90px;",
-                     _id="save_search"
-                     )
         return widget
+
+    # -------------------------------------------------------------------------
+    def email(self, r, **kwargs):
+        """
+            Take a search request and render it through a template
+            to format it for email notifications.
+
+            @param r: S3Request object
+        """
+
+        represent = current.manager.represent
+
+        # Saved search is optional, but used to filter results and
+        # put save search name into the output
+        search_subscription = current.request.get_vars.get("search_subscription", None)
+        if search_subscription:
+            search = current.db(current.s3db.pr_saved_search.auth_token == search_subscription).select().first()
+        else:
+            search = None
+
+        if search:
+            controller = search.controller
+            function = search.function
+            last_checked = search.last_checked
+
+        list_fields = self._config("list_fields")
+
+        # create a list of the names, not labels, from list_fields
+        field_names = []
+        for f in list_fields:
+            if f != "id":
+                if isinstance(f, tuple):
+                    field_names.append(f[1]) # (label, name)
+                else:
+                    field_names.append(f)
+
+        # Get the field objects based on list_fields
+        fields = self.resource.readable_fields(field_names)
+
+        # We don't want to show the "id" field at all
+        head_row = TR([TH(f.label) for f in fields if f.name != "id"])
+        new_rows = []
+        nappend = new_rows.append
+        mod_rows = []
+        mappend = mod_rows.append
+
+        for row in self.resource.load():
+            first_cell = True # disabled
+            row_cells = []
+            rappend = row_cells.append
+
+            for f in fields:
+                rep_value = represent(f, record=row)
+
+                # Hyperlink the text in the first
+                # cell to the record page
+                if first_cell and search:
+                    url = URL(c=controller, f=function, args=row["id"],
+                              scheme=True)
+                    rep_value = A(rep_value, _href=url)
+                    first_cell = False
+
+                rappend(TD(XML(rep_value)))
+
+            if row_cells:
+                tr = TR(*row_cells)
+
+                if search and row.created_on >= last_checked:
+                    # Records are either "new" or "modified"
+                    nappend(tr)
+                else:
+                    mappend(tr)
+
+        if not new_rows and not mod_rows:
+            return ""
+
+        # Generate a table for the new records
+        if new_rows:
+            new_table = TABLE(THEAD(head_row),
+                              TBODY(*new_rows))
+        else:
+            new_table = None
+
+        # Generate a table for updated records
+        if mod_rows:
+            mod_table = TABLE(THEAD(head_row),
+                              TBODY(*mod_rows))
+        else:
+            mod_table = None
+
+        if search:
+            search_name = search.name
+        else:
+            search_name = ""
+
+        response = current.response
+        crud_strings = response.s3.crud_strings[self.resource.tablename]
+
+        if crud_strings:
+            resource_name = crud_strings.title_list
+        else:
+            resource_name = string.capwords(self.resource.name, "_")
+
+        # Render the records via a template
+        message = response.render(
+            "msg/notification_email.html",
+            {
+                "search_name": search_name,
+                "new_table": new_table,
+                "mod_table": mod_table,
+                "system_name": current.deployment_settings.get_system_name(),
+                "resource_name": resource_name,
+            }
+        )
+
+        return message
 
     # -------------------------------------------------------------------------
     def search_interactive(self, r, **attr):
@@ -1260,7 +1248,8 @@ class S3Search(S3CRUD):
             @param attr: request parameters
         """
 
-        # Get environment
+        from s3.s3utils import S3DataTable
+
         T = current.T
         session = current.session
         request = self.request
@@ -1270,11 +1259,9 @@ class S3Search(S3CRUD):
         settings = current.deployment_settings
         db = current.db
         s3db = current.s3db
-        gis = current.gis
         table = self.table
         tablename = self.tablename
 
-        # Get representation
         representation = r.representation
 
         # Initialize output
@@ -1304,44 +1291,62 @@ class S3Search(S3CRUD):
                 session_options = session.s3.search_options
                 if session_options and tablename in session_options:
                     # session
-                    session_options = session_options[tablename]
+                    if "clear_opts" in r.get_vars:
+                        session_options = Storage()
+                    else:
+                        session_options = session_options[tablename]
                 else:
                     # unfiltered
                     session_options = Storage()
                 form_values = session_options
+            if "clear_opts" in r.get_vars:
+                del r.get_vars["clear_opts"]
+            if "clear_opts" in r.vars:
+                del r.vars["clear_opts"]
+
+        # Remove the existing session filter if this is a new
+        # search (@todo: do not store the filter in session)
+        if r.http == "GET" and r.representation != "aadata":
+            if "filter" in session.s3:
+                del session.s3["filter"]
 
         # Build the search forms
         simple_form, advanced_form = self.build_forms(r, form_values)
-
-        # Check for Load Search
-        if "load" in r.get_vars:
-            search_id = r.get_vars.get("load", None)
-            if not search_id:
-                r.error(400, current.manager.ERROR.BAD_RECORD)
-            r.post_vars = r.vars
-            search_table = s3db.pr_save_search
-            _query = (search_table.id == search_id)
-            record = db(_query).select(record.search_vars,
-                                       limitby=(0, 1)).first()
-            if not record:
-                r.error(400, current.manager.ERROR.BAD_RECORD)
-            import cPickle
-            s_vars = cPickle.loads(record.search_vars)
-            r.post_vars = Storage(s_vars["criteria"])
-            r.http = "POST"
 
         # Process the search forms
         query, errors = self.process_forms(r,
                                            simple_form,
                                            advanced_form,
                                            form_values)
+
+        search_url = None
+        search_url_vars = Storage()
+        save_search = ""
         if not errors:
+            if hasattr(query, "serialize_url"):
+                search_url_vars = query.serialize_url(resource)
+                search_url = r.url(method = "",
+                                   vars = search_url_vars)
+
+                # Create a Save Search widget
+                save_search = self.save_search_widget(r, query, **attr)
+
             resource.add_filter(query)
             search_vars = dict(simple=False,
                                advanced=True,
                                criteria=form_values)
         else:
             search_vars = dict()
+
+        s3.formats.pdf = r.url(method="",
+                               vars=search_url_vars,
+                               representation="pdf")
+        s3.formats.xls = r.url(method="",
+                               vars=search_url_vars,
+                               representation="xls")
+        s3.formats.rss = r.url(method="",
+                               vars=search_url_vars,
+                               representation="rss")
 
         if representation == "plain":
             # Map popup filter
@@ -1356,36 +1361,18 @@ class S3Search(S3CRUD):
         else:
             form.append(DIV(_id="search-mode", _mode="advanced"))
 
-        # Save Search Widget
-        if session.auth and settings.get_save_search_widget():
-            save_search = self.save_search_widget(r, search_vars, **attr)
-        else:
-            save_search = DIV()
-
         # Complete the output form-DIV()
         if simple_form is not None:
-            simple_form.append(save_search)
+            # Insert the save button next to the submit button
+            simple_form[0][-1][1].insert(1, save_search)
             form.append(simple_form)
         if advanced_form is not None:
-            advanced_form.append(save_search)
+            # Insert the save button next to the submit button
+            advanced_form[0][-1][1].insert(1, save_search)
             form.append(advanced_form)
         output["form"] = form
 
-        # Build session filter (for SSPag)
-        if not s3.no_sspag:
-            limit = 1
-            ids = resource.get_id()
-            if ids:
-                if not isinstance(ids, list):
-                    ids = str(ids)
-                else:
-                    ids = ",".join([str(i) for i in ids])
-                session.s3.filter = {"%s.id" % resource.name: ids}
-        else:
-            limit = None
-
         # List fields
-        linkto = self._linkto(r)
         if not list_fields:
             fields = resource.readable_fields()
             list_fields = [f.name for f in fields]
@@ -1397,6 +1384,36 @@ class S3Search(S3CRUD):
             fields.insert(0, table[table.fields[0]])
         if list_fields[0] != table.fields[0]:
             list_fields.insert(0, table.fields[0])
+
+        # Count rows
+        totalrows = resource.count()
+        displayrows = totalrows
+
+        # How many records per page?
+        if s3.dataTable_iDisplayLength:
+            display_length = s3.dataTable_iDisplayLength
+        else:
+            display_length = 25
+
+        # Server-side pagination?
+        if not s3.no_sspag:
+            dt_pagination = "true"
+            limit = 2 * display_length
+
+            # Build session filter for data tables
+            # @todo: do not use session to store filter
+            ids = resource.get_id()
+            if ids:
+                if not isinstance(ids, list):
+                    ids = str(ids)
+                else:
+                    ids = ",".join([str(i) for i in ids])
+                session.s3.filter = {"%s.id" % resource.name: ids}
+
+        else:
+            limit = None
+            dt_pagination = "false"
+
         if not orderby:
             orderby = fields[0]
 
@@ -1406,81 +1423,41 @@ class S3Search(S3CRUD):
                 if str(f.type) == "text" and not f.represent:
                     f.represent = self.truncate
 
-        # Get the result table
-        items = resource.sqltable(fields=list_fields,
-                                  limit=limit,
-                                  orderby=orderby,
-                                  distinct=True,
-                                  linkto=linkto,
-                                  download_url=self.download_url,
-                                  format=representation)
-
         # Remove the dataTables search box to avoid confusion
         s3.dataTable_NobFilter = True
 
-        if items:
-            if not s3.no_sspag:
-                # Pre-populate SSPag cache (avoids the 1st Ajax request)
-                totalrows = resource.count(distinct=True)
-                if totalrows:
-                    if s3.dataTable_iDisplayLength:
-                        limit = 2 * s3.dataTable_iDisplayLength
-                    else:
-                        limit = 50
-                    sqltable = resource.sqltable(fields=list_fields,
-                                                 start=0,
-                                                 limit=limit,
-                                                 orderby=orderby,
-                                                 distinct=True,
-                                                 linkto=linkto,
-                                                 download_url=self.download_url,
-                                                 as_page=True,
-                                                 format=representation)
+        # Get the data table
+        dt = resource.datatable(fields=list_fields,
+                                start=None,
+                                limit=limit,
+                                #left=left,
+                                #distinct=distinct,
+                                orderby=orderby)
 
-                    aadata = dict(aaData=sqltable or [])
-                    aadata.update(iTotalRecords=totalrows,
-                                  iTotalDisplayRecords=totalrows)
-                    response.aadata = jsons(aadata)
-                    s3.start = 0
-                    s3.limit = limit
+        if dt is None:
+            datatable = self.crud_string(tablename, "msg_no_match")
+            s3.no_formats = True
+        else:
+            datatable = dt.html(totalrows, displayrows, "list",
+                                dt_pagination=dt_pagination,
+                                dt_displayLength=display_length,
+                                dt_permalink=search_url)
 
-        elif not items:
-            items = self.crud_string(tablename, "msg_no_match")
+        # Add items to output
+        output["items"] = datatable
 
-        output["items"] = items
-        output["sortby"] = sortby
-
+        items = output["items"]
         if isinstance(items, DIV):
             filter = session.s3.filter
             app = request.application
-            list_formats = DIV(T("Export to:"),
-                               A(IMG(_src="/%s/static/img/pdficon_small.gif" % app),
-                                 _title=T("Export in PDF format"),
-                                 _href=r.url(method="", representation="pdf",
-                                             vars=filter)),
-                               A(IMG(_src="/%s/static/img/icon-xls.png" % app),
-                                 _title=T("Export in XLS format"),
-                                 _href=r.url(method="", representation="xls",
-                                             vars=filter)),
-                               A(IMG(_src="/%s/static/img/RSS_16.png" % app),
-                                 _title=T("Export in RSS format"),
-                                 _href=r.url(method="", representation="rss",
-                                             vars=filter)),
-                               _id="list_formats")
-            tabs = []
 
+            tabs = []
             if "location_id" in table or \
                "site_id" in table:
                 # Add a map for search results
                 # (this same map is also used by the Map Search Widget, if-present)
                 tabs.append((T("Map"), "map"))
                 app = request.application
-                list_formats.append(A(IMG(_src="/%s/static/img/kml_icon.png" % app),
-                                      _title=T("Export in KML format"),
-                                      _href=r.url(method="",
-                                                  representation="kml",
-                                                  vars=filter)),
-                                    )
                 # Build URL to load the features onto the map
                 if query:
                     vars = query.serialize_url(resource=resource)
@@ -1489,6 +1466,7 @@ class S3Search(S3CRUD):
                 url = URL(extension="geojson",
                           args=None,
                           vars=vars)
+                gis = current.gis
                 feature_resources = [{
                         "name"   : T("Search Results"),
                         "id"     : "search_results",
@@ -1512,23 +1490,45 @@ class S3Search(S3CRUD):
                 s3.dataTableMap = map_popup
 
             if settings.has_module("msg") and \
-               ("pe_id" in table or "person_id" in table):
+               ("pe_id" in table or "person_id" in table) and \
+               current.auth.permission.has_permission("update", c="msg"):
                 # Provide the ability to Message person entities in search results
                 tabs.append((T("Message"), "compose"))
 
             if tabs:
                 tabs.insert(0, ((T("List"), None)))
+
+            # @todo: this needs rework
+            #        - s3FormatRequest must retain any URL filters
+            #        - s3FormatRequest must remove the "search" method
+            #        - other data formats could have other list_fields,
+            #          hence applying the datatable sorting/filters is
+            #          not transparent
+
+            #if not s3.datatable_ajax_source:
+                #s3.datatable_ajax_source = str(r.url(representation = "aaData"))
+            #s3.formats.pdf = r.url(method="")
+            #s3.formats.xls = r.url(method="")
+            #s3.formats.rss = r.url(method="")
+            #attr = S3DataTable.getConfigData()
+            #items = S3DataTable.htmlConfig(items,
+                                           #"list",
+                                           #sortby, # order by
+                                           ##filter, # the filter string
+                                           #None, # the rfields
+                                           #**attr
+                                           #)
+            #items[0].insert(0, sep)
+            #items[0].insert(0, link)
         else:
-            list_formats = ""
             tabs = []
 
+        output["items"] = items
+        output["sortby"] = sortby
 
         # Search Tabs
         search_tabs = s3_search_tabs(r, tabs)
         output["search_tabs"] = search_tabs
-
-        # List Formats
-        output["list_formats"] = list_formats
 
         # Title and subtitle
         output["title"] = self.crud_string(tablename, "title_search")
@@ -1564,8 +1564,7 @@ class S3Search(S3CRUD):
         simple = simple_form is not None
         if simple_form is not None:
             if simple_form.accepts(form_values,
-                                   formname="search_simple",
-                                   keepvalues=True):
+                                   formname="search_simple"):
                 for name, widget in self.simple:
                     query, errors = self._build_widget_query(self.resource,
                                                              name,
@@ -1586,11 +1585,11 @@ class S3Search(S3CRUD):
         # Process the advanced search form:
         if advanced_form is not None:
             if advanced_form.accepts(form_values,
-                                     formname="search_advanced",
-                                     keepvalues=True):
+                                     formname="search_advanced"):
                 simple = False
+                resource = self.resource
                 for name, widget in self.advanced:
-                    query, errors = self._build_widget_query(self.resource,
+                    query, errors = self._build_widget_query(resource,
                                                              name,
                                                              widget,
                                                              advanced_form,
@@ -1631,12 +1630,18 @@ class S3Search(S3CRUD):
         ADD = self.crud_string(tablename, "label_create_button")
         href_add = r.url(method="create", representation=representation)
         insertable = self._config("insertable", True)
-        authorised = self.permit("create", tablename)
+        authorised = self._permitted("create")
         if authorised and insertable and representation != "plain":
             add_link = self.crud_button(ADD, _href=href_add,
                                         _id="add-btn", _class="action-lnk")
         else:
             add_link = ""
+
+        opts = Storage(r.get_vars)
+        opts["clear_opts"] = "1"
+        clear_opts = A(T("Reset all filters"),
+                       _href=r.url(vars=opts),
+                       _class="action-lnk")
 
         # Simple search form
         if simple:
@@ -1648,6 +1653,7 @@ class S3Search(S3CRUD):
                 switch_link = ""
             simple_form = self._build_form(simple,
                                            form_values=form_values,
+                                           clear=clear_opts,
                                            add=add_link,
                                            switch=switch_link,
                                            _class="simple-form")
@@ -1663,6 +1669,7 @@ class S3Search(S3CRUD):
                 _class = "%s"
             advanced_form = self._build_form(advanced,
                                              form_values=form_values,
+                                             clear=clear_opts,
                                              add=add_link,
                                              switch=switch_link,
                                              _class=_class % "advanced-form")
@@ -1670,9 +1677,24 @@ class S3Search(S3CRUD):
         return (simple_form, advanced_form)
 
     # -------------------------------------------------------------------------
-    def _build_form(self, widgets, form_values=None, add="", switch="", **attr):
+    def _build_form(self, widgets,
+                    form_values=None,
+                    clear="",
+                    add="",
+                    switch="",
+                    **attr):
         """
-            @todo: docstring
+            Render a search form.
+
+            @param widgets: the widgets
+            @param form_values: the form values (as dict) to pass to
+                                the widgets
+            @param clear: the clear-values action link
+            @param add: the add-record action link
+            @param switch: the switch-forms action link
+            @param attr: HTML attributes for the form
+
+            @returns: a FORM instance
         """
 
         T = current.T
@@ -1704,7 +1726,7 @@ class S3Search(S3CRUD):
             trows.append(tr)
 
         trows.append(TR("", TD(INPUT(_type="submit", _value=T("Search")),
-                               switch, add)))
+                               clear, switch, add)))
         form = FORM(TABLE(trows), **attr)
         return form
 
@@ -1830,7 +1852,7 @@ class S3Search(S3CRUD):
                                          % MAX_SEARCH_RESULTS)])
 
             if output is None:
-                output = resource.exporter.json(resource,
+                output = S3Exporter().json(resource,
                                                 start=0,
                                                 limit=limit,
                                                 fields=fields,
@@ -2027,8 +2049,7 @@ class S3Search(S3CRUD):
             errors = True
 
         # How can this be done more elegantly?
-        resource_represent = { "human_resource":
-                               lambda id: \
+        resource_represent = {"human_resource": lambda id: \
                                 response.s3.hrm_human_resource_represent(id,
                                                                          show_link=True)
                               }
@@ -2042,10 +2063,10 @@ class S3Search(S3CRUD):
                           distinct=True)
 
         # Get the rows
-        rows = resource.select(field, **attributes)
+        rows = resource._load(field, **attributes)
 
         if not errors:
-            output = [{ "id"   : row[get_fieldname],
+            output = [{"id" : row[get_fieldname],
                        "represent" : str(represent(row[get_fieldname]))
                        } for row in rows ]
         else:
@@ -2133,17 +2154,29 @@ class S3LocationSearch(S3Search):
             fieldname = str.lower(_vars.field)
             field = table[fieldname]
 
-            # Default fields to return
-            fields = [table.id,
-                      table.name,
-                      table.level,
-                      table.parent,
-                      table.path,
-                      table.uuid,
-                      table.lat,
-                      table.lon,
-                      table.addr_street,
-                      table.addr_postcode]
+            if _vars.simple:
+                fields = [table.id,
+                          table.name,
+                          table.level,
+                          table.path,
+                          table.L0,
+                          table.L1,
+                          table.L2,
+                          table.L3
+                          ]
+            else:
+                # Default fields to return
+                fields = [table.id,
+                          table.name,
+                          table.level,
+                          table.parent,
+                          table.path,
+                          table.uuid,
+                          table.lat,
+                          table.lon,
+                          table.addr_street,
+                          table.addr_postcode
+                          ]
 
             # Optional fields
             if "level" in _vars and _vars.level:
@@ -2191,7 +2224,7 @@ class S3LocationSearch(S3Search):
             filter = _vars.filter
             if filter == "~":
                 if children:
-                    # New LocationSelector
+                    # LocationSelector
                     children = current.gis.get_children(children, level=level)
                     children = children.find(lambda row: \
                                              row.name and value in str.lower(row.name))
@@ -2199,15 +2232,8 @@ class S3LocationSearch(S3Search):
                     response.headers["Content-Type"] = "application/json"
                     return output
 
-                if exclude_field and exclude_value:
-                    # Old LocationSelector
-                    # Filter out poor-quality data, such as from Ushahidi
-                    query = (field.lower().like(value + "%")) & \
-                            ((table[exclude_field].lower() != exclude_value) | \
-                             (table[exclude_field] == None))
-
-                elif field2:
-                    # New LocationSelector
+                if field2:
+                    # LocationSelector for addr_street
                     query = ((field.lower().like(value + "%")) | \
                              (field2.lower().like(value + "%")))
 
@@ -2215,9 +2241,9 @@ class S3LocationSearch(S3Search):
                     # Normal single-field
                     query = (field.lower().like(value + "%"))
 
+                resource.add_filter(query)
                 if level:
-                    resource.add_filter(query)
-                    # New LocationSelector or Autocomplete
+                    # LocationSelector or Autocomplete
                     if isinstance(level, list):
                         query = (table.level.belongs(level))
                     elif str.upper(level) == "NULLNONE":
@@ -2225,9 +2251,12 @@ class S3LocationSearch(S3Search):
                         query = (table.level == level)
                     else:
                         query = (table.level == level)
+                else:
+                    # Filter out poor-quality data, such as from Ushahidi
+                    query = (table.level != "XX")
 
                 if parent:
-                    # New LocationSelector
+                    # LocationSelector
                     resource.add_filter(query)
                     query = (table.parent == parent)
 
@@ -2257,13 +2286,11 @@ class S3LocationSearch(S3Search):
                           table.lat,
                           table.lon,
                           table.addr_street,
-                          table.addr_postcode]
+                          table.addr_postcode
+                          ]
             else:
-                output = current.xml.json_message(
-                                False,
-                                400,
-                                "Unsupported filter! Supported filters: ~, ="
-                            )
+                output = current.xml.json_message(False, 400,
+                                "Unsupported filter! Supported filters: ~, =")
                 raise HTTP(400, body=output)
 
 
@@ -2278,17 +2305,17 @@ class S3LocationSearch(S3Search):
             if (not limit or limit > MAX_SEARCH_RESULTS) and resource.count() > MAX_SEARCH_RESULTS:
                 output = jsons([dict(id="",
                                      name="Search results are over %d. Please input more characters." \
-                                     % MAX_SEARCH_RESULTS)])
+                                        % MAX_SEARCH_RESULTS)])
         elif not parent:
             if (not limit or limit > MAX_RESULTS) and resource.count() > MAX_RESULTS:
                 output = jsons([])
 
         if output is None:
-            output = resource.exporter.json(resource,
-                                            start=0,
-                                            limit=limit,
-                                            fields=fields,
-                                            orderby=field)
+            output = S3Exporter().json(resource,
+                                       start=0,
+                                       limit=limit,
+                                       fields=fields,
+                                       orderby=field)
 
         response.headers["Content-Type"] = "application/json"
         return output
@@ -2339,16 +2366,13 @@ class S3OrganisationSearch(S3Search):
                         (S3FieldSelector("organisation.acronym").lower().like(value + "%"))
 
             else:
-                output = current.xml.json_message(
-                                False,
-                                400,
-                                "Unsupported filter! Supported filters: ~"
-                            )
+                output = current.xml.json_message(False, 400,
+                                "Unsupported filter! Supported filters: ~")
                 raise HTTP(400, body=output)
 
         resource.add_filter(query)
 
-        limit = int(_vars.limit or 0)
+        limit = int(_vars.limit or MAX_SEARCH_RESULTS)
         if (not limit or limit > MAX_SEARCH_RESULTS) and resource.count() > MAX_SEARCH_RESULTS:
             output = jsons([dict(id="",
                                  name="Search results are over %d. Please input more characters." \
@@ -2366,7 +2390,7 @@ class S3OrganisationSearch(S3Search):
             limitby = resource.limitby(start=0, limit=limit)
             if limitby is not None:
                 attributes["limitby"] = limitby
-            rows = resource.select(*fields, **attributes)
+            rows = resource._load(*fields, **attributes)
             output = []
             append = output.append
             db = current.db
@@ -2378,13 +2402,11 @@ class S3OrganisationSearch(S3Search):
                     parent = db(query).select(table.name,
                                               limitby = (0, 1)).first()
                     if parent:
-                        name = "%s > %s" % (parent.name,
-                                            name)
+                        name = "%s > %s" % (parent.name, name)
                 if not parent:
                     acronym = row[table].acronym
                     if acronym:
-                        name = "%s (%s)" % (name,
-                                            acronym)
+                        name = "%s (%s)" % (name, acronym)
                 record = dict(
                     id = row[table].id,
                     name = name,
@@ -2459,11 +2481,10 @@ class S3PersonSearch(S3Search):
                       "last_name",
                       ]
 
-            rows = resource.sqltable(fields=fields,
-                                     start=0,
-                                     limit=limit,
-                                     orderby="pr_person.first_name",
-                                     as_rows=True)
+            rows = resource.select(fields=fields,
+                                   start=0,
+                                   limit=limit,
+                                   orderby="pr_person.first_name")
 
             if rows:
                 items = [{
@@ -2507,11 +2528,7 @@ class S3HRSearch(S3Search):
         value = _vars.term or _vars.value or _vars.q or None
 
         if not value:
-            output = current.xml.json_message(
-                            False,
-                            400,
-                            "No value provided!"
-                        )
+            output = current.xml.json_message(False, 400, "No value provided!")
             raise HTTP(400, body=output)
 
         # We want to do case-insensitive searches
@@ -2540,23 +2557,22 @@ class S3HRSearch(S3Search):
         if (not limit or limit > MAX_SEARCH_RESULTS) and resource.count() > MAX_SEARCH_RESULTS:
             output = jsons([dict(id="",
                                  name="Search results are over %d. Please input more characters." \
-                                 % MAX_SEARCH_RESULTS)])
+                                    % MAX_SEARCH_RESULTS)])
         else:
             fields = ["id",
                       "person_id$first_name",
                       "person_id$middle_name",
                       "person_id$last_name",
-                      "job_role_id$name",
+                      "job_title_id$name",
                       ]
             show_orgs = current.deployment_settings.get_hrm_show_organisation()
             if show_orgs:
                 fields.append("organisation_id$name")
 
-            rows = resource.sqltable(fields=fields,
-                                     start=0,
-                                     limit=limit,
-                                     orderby="pr_person.first_name",
-                                     as_rows=True)
+            rows = resource.select(fields=fields,
+                                   start=0,
+                                   limit=limit,
+                                   orderby="pr_person.first_name")
 
             if rows:
                 items = [{
@@ -2565,7 +2581,7 @@ class S3HRSearch(S3Search):
                             "middle" : row["pr_person"].middle_name or "",
                             "last"   : row["pr_person"].last_name or "",
                             "org"    : row["org_organisation"].name if show_orgs else "",
-                            "job"    : row["hrm_job_role"].name or "",
+                            "job"    : row["hrm_job_title"].name or "",
                         } for row in rows ]
             else:
                 items = []
@@ -2633,16 +2649,13 @@ class S3PentitySearch(S3Search):
                             (field3.lower().like(value + "%")))
                 resource.add_filter(query)
             else:
-                output = current.xml.json_message(
-                                False,
-                                400,
-                                "Unsupported filter! Supported filters: ~"
-                            )
+                output = current.xml.json_message(False, 400,
+                                "Unsupported filter! Supported filters: ~")
                 raise HTTP(400, body=output)
 
         resource.add_filter(ptable.pe_id == table.pe_id)
 
-        output = resource.exporter.json(resource, start=0, limit=limit,
+        output = S3Exporter().json(resource, start=0, limit=limit,
                                         fields=[table.pe_id], orderby=field)
         items = json.loads(output)
 
@@ -2654,7 +2667,7 @@ class S3PentitySearch(S3Search):
             resource.clear_query()
             resource.add_filter(query)
             resource.add_filter(gtable.pe_id == table.pe_id)
-            output = resource.exporter.json(resource,
+            output = S3Exporter().json(resource,
                                             start=0,
                                             limit=limit,
                                             fields=[table.pe_id],
@@ -2669,7 +2682,7 @@ class S3PentitySearch(S3Search):
             resource.clear_query()
             resource.add_filter(query)
             resource.add_filter(otable.pe_id == table.pe_id)
-            output = resource.exporter.json(resource,
+            output = S3Exporter().json(resource,
                                             start=0,
                                             limit=limit,
                                             fields=[table.pe_id],

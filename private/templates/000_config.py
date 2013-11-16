@@ -23,7 +23,7 @@ FINISHED_EDITING_CONFIG_FILE = False
 # - Workflows
 # - Theme
 # - note that you should restart your web2py after changing this setting
-settings.base.template = "RGIMS"
+settings.base.template = "default"
 
 # Database settings
 # Uncomment to use a different database, other than sqlite
@@ -80,12 +80,28 @@ settings.auth.hmac_key = "akeytochange"
 #settings.mail.tls = True
 #settings.mail.login = "username:password"
 # From Address
-settings.mail.sender = "'RGIMS' <rgims@dswd.gov.ph>"
+#settings.mail.sender = "'Sahana' <sahana@example.org>"
 # Default email address to which requests to approve new user accounts gets sent
 # This can be overridden for specific domains/organisations via the auth_domain table
-settings.mail.approver = "rgims@dswd.gov.ph"
+#settings.mail.approver = "useradmin@example.org"
 # Daily Limit on Sending of emails
 #settings.mail.limit = 1000
+
+# Frontpage settings
+# RSS feeds
+settings.frontpage.rss = [
+    {"title": "Eden",
+     # Trac timeline
+     "url": "http://eden.sahanafoundation.org/timeline?ticket=on&changeset=on&milestone=on&wiki=on&max=50&daysback=90&format=rss"
+    },
+    {"title": "Twitter",
+     # @SahanaFOSS
+     # Find ID via http://api.twitter.com/users/show/username.json
+     "url": "http://twitter.com/statuses/user_timeline/96591754.rss"
+     # Hashtag
+     #url: "http://search.twitter.com/search.atom?q=%23eqnz"
+    }
+]
 
 # Enable session store in Memcache to allow sharing of sessions across instances
 #settings.base.session_memcache = '127.0.0.1:11211'
@@ -118,8 +134,8 @@ settings.mail.approver = "rgims@dswd.gov.ph"
 # Register an app at http://twitter.com/apps
 # (select Aplication Type: Client)
 # You'll get your consumer_key and consumer_secret from Twitter
-#settings.msg_twitter_oauth_consumer_key = ""
-#settings.msg_twitter_oauth_consumer_secret = ""
+#settings.msg.twitter_oauth_consumer_key = ""
+#settings.msg.twitter_oauth_consumer_secret = ""
 
 # UI options
 # Should user be prompted to save before navigating away?

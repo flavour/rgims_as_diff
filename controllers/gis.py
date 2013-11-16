@@ -124,7 +124,7 @@ def location():
             s3base.S3SearchOptionsWidget(
                 name="location_search_L0",
                 field="L0",
-                label = T("Country"),
+                label = COUNTRY,
                 cols = 3,
             ),
             s3base.S3SearchOptionsWidget(
@@ -148,7 +148,7 @@ def location():
             # NB This currently only works for locations with the country as direct parent (i.e. mostly L1s)
             #s3base.S3SearchOptionsWidget(
             #    name = "location_search_country",
-            #    label = T("Country"),
+            #    label = COUNTRY,
             #    field = "parent",
             #    cols = 2
             #),
@@ -203,9 +203,19 @@ def location():
                             ),
                     )
 
-    # Custom Method
-    s3db.set_method("gis", "location", method="parents",
-                    action=s3_gis_location_parents)
+    # Custom Methods
+    set_method = s3db.set_method
+    from s3.s3gis import S3ExportPOI
+    set_method("gis", "location",
+               method="export_poi",
+               action=S3ExportPOI())
+    from s3.s3gis import S3ImportPOI
+    set_method("gis", "location",
+               method="import_poi",
+               action=S3ImportPOI())
+    set_method("gis", "location",
+               method="parents",
+               action=s3_gis_location_parents)
 
     # Pre-processor
     # Allow prep to pass vars back to the controller
@@ -342,7 +352,7 @@ def location():
         table.addr_street.readable = table.addr_street.writable = False
 
     country = S3ReusableField("country", "string", length=2,
-                              label = T("Country"),
+                              label = COUNTRY,
                               requires = IS_NULL_OR(IS_IN_SET_LAZY(
                                     lambda: gis.get_countries(key_type="code"),
                                     zero = SELECT_LOCATION)),
@@ -350,6 +360,7 @@ def location():
                                     gis.get_country(code, key_type="code") or UNKNOWN_OPT)
 
     output = s3_rest_controller(rheader=s3db.gis_rheader,
+                                # CSV column headers, so no T()
                                 csv_extra_fields = [
                                     dict(label="Country",
                                          field=country())
@@ -547,6 +558,7 @@ def config():
                                 "gis_layer_gpx",
                                 "gis_layer_kml",
                                 "gis_layer_mgrs",
+                                "gis_layer_openweathermap",
                                 "gis_layer_wfs",
                                 ):
                         field = ltable.base
@@ -742,6 +754,8 @@ def symbology():
                                                                       "gis_layer_georss",
                                                                       "gis_layer_geojson",
                                                                       "gis_layer_kml",
+                                                                      # @ToDo:
+                                                                      #"gis_layer_openweathermap",
                                                                       ),
                                                          not_filterby="layer_id",
                                                          not_filter_opts=[row.layer_id for row in rows]
@@ -1300,7 +1314,8 @@ def layer_arcrest():
         msg_list_empty=NO_LAYERS)
 
     # Custom Method
-    s3db.set_method(module, resourcename, method="enable",
+    s3db.set_method(module, resourcename,
+                    method="enable",
                     action=enable_layer)
 
     # Pre-processor
@@ -1456,7 +1471,8 @@ def layer_georss():
         msg_list_empty=NO_LAYERS)
 
     # Custom Method
-    s3db.set_method(module, resourcename, method="enable",
+    s3db.set_method(module, resourcename,
+                    method="enable",
                     action=enable_layer)
 
     # Pre-processor
@@ -1675,6 +1691,96 @@ def layer_kml():
     return output
 
 # -----------------------------------------------------------------------------
+def layer_openweathermap():
+    """ RESTful CRUD controller """
+
+    tablename = "%s_%s" % (module, resourcename)
+    s3db.table(tablename)
+
+    # CRUD Strings
+    type = "OpenWeatherMap"
+    LAYERS = T(TYPE_LAYERS_FMT % type)
+    ADD_NEW_LAYER = T(ADD_NEW_TYPE_LAYER_FMT % type)
+    EDIT_LAYER = T(EDIT_TYPE_LAYER_FMT % type)
+    LIST_LAYERS = T(LIST_TYPE_LAYERS_FMT % type)
+    NO_LAYERS = T(NO_TYPE_LAYERS_FMT % type)
+    s3.crud_strings[tablename] = Storage(
+        title_create=ADD_LAYER,
+        title_display=LAYER_DETAILS,
+        title_list=LAYERS,
+        title_update=EDIT_LAYER,
+        title_search=SEARCH_LAYERS,
+        subtitle_create=ADD_NEW_LAYER,
+        label_list_button=LIST_LAYERS,
+        label_create_button=ADD_LAYER,
+        label_delete_button = DELETE_LAYER,
+        msg_record_created=LAYER_ADDED,
+        msg_record_modified=LAYER_UPDATED,
+        msg_record_deleted=LAYER_DELETED,
+        msg_list_empty=NO_LAYERS)
+
+    # Custom Method
+    s3db.set_method(module, resourcename,
+                    method="enable",
+                    action=enable_layer)
+
+    # Pre-processor
+    def prep(r):
+        if r.interactive:
+            if r.component_name == "config":
+                ltable = s3db.gis_layer_config
+                field = ltable.base
+                field.readable = False
+                field.writable = False
+                if r.method != "update":
+                    # Only show Configs with no definition yet for this layer
+                    table = r.table
+                    # Find the records which are used
+                    query = (ltable.layer_id == table.layer_id) & \
+                            (table.id == r.id)
+                    rows = db(query).select(ltable.config_id)
+                    # Filter them out
+                    ltable.config_id.requires = IS_ONE_OF(db, "gis_config.id",
+                                                         "%(name)s",
+                                                         not_filterby="config_id",
+                                                         not_filter_opts=[row.config_id for row in rows]
+                                                         )
+            elif r.component_name == "symbology":
+                ltable = s3db.gis_layer_symbology
+                field = ltable.gps_marker
+                field.readable = False
+                field.writable = False
+                if r.method != "update":
+                    # Only show ones with no definition yet for this Layer
+                    table = r.table
+                    # Find the records which are used
+                    query = (ltable.layer_id == table.layer_id) & \
+                            (table.id == r.id)
+                    rows = db(query).select(ltable.symbology_id)
+                    # Filter them out
+                    ltable.symbology_id.requires = IS_ONE_OF(db, "gis_symbology.id",
+                                                             "%(name)s",
+                                                             not_filterby="id",
+                                                             not_filter_opts=[row.symbology_id for row in rows]
+                                                            )
+        return True
+    s3.prep = prep
+
+    # Post-processor
+    def postp(r, output):
+        if r.interactive and r.method != "import":
+            if not r.component:
+                s3_action_buttons(r)
+                # Inject checkbox to enable layer in default config
+                inject_enable(output)
+        return output
+    s3.postp = postp
+
+    output = s3_rest_controller(rheader=s3db.gis_rheader)
+
+    return output
+
+# -----------------------------------------------------------------------------
 def layer_theme():
     """ RESTful CRUD controller """
 
@@ -1754,6 +1860,7 @@ def theme_data():
     """ RESTful CRUD controller """
 
     output = s3_rest_controller(csv_extra_fields = [
+                                    # CSV column headers, so no T()
                                     dict(label="Layer",
                                          field=s3db.gis_layer_theme_id())
                                 ])
@@ -1792,7 +1899,7 @@ def layer_tms():
     # Custom Method
     s3db.set_method(module, resourcename,
                     method="enable",
-                           action=enable_layer)
+                    action=enable_layer)
 
     # Pre-processor
     def prep(r):
@@ -1930,8 +2037,8 @@ def layer_wms():
 
     # Custom Method
     s3db.set_method(module, resourcename,
-                           method="enable",
-                           action=enable_layer)
+                    method="enable",
+                    action=enable_layer)
 
     # Pre-processor
     def prep(r):
@@ -1999,8 +2106,8 @@ def layer_xyz():
 
     # Custom Method
     s3db.set_method(module, resourcename,
-                           method="enable",
-                           action=enable_layer)
+                    method="enable",
+                    action=enable_layer)
 
     # Pre-processor
     def prep(r):
@@ -2185,7 +2292,7 @@ def feature_query():
     s3.filter = (table.lat != None) & (table.lon != None)
 
     # Parse the Request
-    r = s3mgr.parse_request()
+    r = s3_request()
 
     if r.representation != "geojson":
         session.error = BADFORMAT

@@ -90,7 +90,7 @@
             </xsl:for-each>
 
             <!-- Generate subcategories -->
-            <xsl:for-each select="//row[generate-id(.)=generate-id(key('subcategory', substring(col[@field='item code']/text(),1,4))[1])]">
+            <xsl:for-each select="//row[generate-id(.)=generate-id(key('subcategory', substring(col[@field='item code']/text(),1,3))[1])]">
                 <xsl:variable name="id" select="substring(col[@field='item code']/text(),1,4)"/>
                 <xsl:variable name="category_code" select="substring(col[@field='item code']/text(),2,4)"/>
                 <xsl:variable name="parent_category_code" select="substring(col[@field='item code']/text(),1,1)"/>
@@ -136,6 +136,12 @@
             <data field="width"><xsl:value-of select="$Width"/></data>
             <data field="volume"><xsl:value-of select="$Volume"/></data>
             <data field="weight"><xsl:value-of select="$Weight"/></data>
+            <!-- Link to Supply Catalog -->
+            <reference field="catalog_id" resource="supply_catalog">
+                <xsl:attribute name="tuid">
+                    <xsl:value-of select="$IFRCStandard"/>
+                </xsl:attribute>
+            </reference>
             <!-- Link to Category -->
             <reference field="item_category_id" resource="supply_item_category">
                 <xsl:attribute name="tuid">

@@ -84,22 +84,8 @@ class S3XLS(S3Codec):
             @param report_groupby: a Field object of the field to group the records by
         """
 
+        from s3.s3utils import S3DataTable
         s3 = current.response.s3
-
-        # List fields
-        if not list_fields:
-            fields = resource.readable_fields()
-            list_fields = [f.name for f in fields if f != "id"]
-        indices = self.indices
-        list_fields = [f for f in list_fields if f not in indices]
-
-        # Filter
-        if s3.filter is not None:
-            resource.add_filter(s3.filter)
-
-        # Retrieve the resource contents
-        table = resource.table
-        lfields, joins, left, distinct = resource.resolve_selectors(list_fields)
 
         # Use the title_list CRUD string for the title
         name = "title_list"
@@ -108,14 +94,10 @@ class S3XLS(S3Codec):
         not_found = s3.crud_strings.get(name, current.request.function)
         title = str(crud_strings.get(name, not_found))
 
-        # Only include fields that can be read.
-        # - doesn't work with virtual fields and anyway list_fields should override readable
-        #headers = [f.label for f in lfields if (f.show and f.field and f.field.readable)]
-        headers = [f.label for f in lfields if f.show]
-        # Doesn't work with Virtual Fields
-        #types = [f.field.type for f in lfields if f.show]
+        rfields = resource.resolve_selectors(list_fields)[0]
+
         types = []
-        for f in lfields:
+        for f in rfields:
             if f.show:
                 if f.field:
                     types.append(f.field.type)
@@ -123,26 +105,25 @@ class S3XLS(S3Codec):
                     # Virtual Field
                     types.append("string")
 
-        orderby = report_groupby
-        if not orderby:
-            # @ToDo: Some central function (where does HRM List get it's orderby from?)
-            if "person_id" in list_fields:
-                orderby = "pr_person.first_name"
-                list_fields.append("person_id$first_name")
-            elif "organisation_id" in list_fields:
-                orderby = "org_organisation.name"
-                list_fields.append("organisation_id$name")
+        lfields = []
+        heading = {}
+        for field in rfields:
+            selector = "%s.%s" % (field.tname, field.fname)
+            lfields.append(selector)
+            heading[selector] = (field.label)
 
-        items = resource.sqltable(fields=list_fields,
-                                  start=None,
-                                  limit=None,
-                                  orderby=orderby,
-                                  no_ids=True,
-                                  as_page=True)
+        (orderby, filter) = S3DataTable.getControlData(rfields, current.request.vars)
+        resource.add_filter(filter)
+        current.manager.ROWSPERPAGE = None # needed to get all the data
+        rows = resource.select(list_fields,
+                               orderby=orderby,
+                               )
+        items = resource.extract(rows,
+                                 list_fields,
+                                 represent=True,
+                                 )
 
-        if items is None:
-            items = []
-        return (title, types, headers, items)
+        return (title, types, lfields,  heading, items)
 
     # -------------------------------------------------------------------------
     def encode(self, data_source, **attr):
@@ -176,13 +157,17 @@ class S3XLS(S3Codec):
         except ImportError:
             current.session.error = self.ERROR.XLRD_ERROR
             redirect(URL(extension=""))
-        # The xlwt library supports a maximum of 182 character in a single cell 
+        # Environment
+        request = current.request
+
+        # The xlwt library supports a maximum of 182 character in a single cell
         max_cell_size = 182
 
         # Get the attributes
         title = attr.get("title")
         list_fields = attr.get("list_fields")
-        report_groupby = attr.get("report_groupby")
+        group = attr.get("dt_group")
+        report_groupby = list_fields[group] if group else None
         use_colour = attr.get("use_colour", False)
         # Extract the data from the data_source
         if isinstance(data_source, (list, tuple)):
@@ -190,18 +175,19 @@ class S3XLS(S3Codec):
             types = data_source[1]
             items = data_source[2:]
         else:
-            (title, types, headers, items) = self.extractResource(data_source,
+            (title, types, lfields,  headers, items) = self.extractResource(data_source,
                                                                   list_fields,
                                                                   report_groupby)
-        if len(headers) != len(items):
-            import sys
-            print >> sys.stderr, "modules/s3/codecs/xls: There is an error in the list_items, a field doesn't exist"
-            print >> sys.stderr, list_fields
-        if report_groupby != None:
-            if isinstance(report_groupby, Field):
-                groupby_label = report_groupby.label
-            else:
-                groupby_label = report_groupby
+        report_groupby = lfields[group] if group else None
+        if len(items) > 0 and len(headers) != len(items[0]):
+            from ..s3utils import s3_debug
+            msg = """modules/s3/codecs/xls: There is an error in the list_items, a field doesn't exist"
+requesting url %s
+Headers = %d, Data Items = %d
+Headers     %s
+List Fields %s""" % (request.url, len(headers), len(items[0]), headers, list_fields)
+            s3_debug(msg)
+        groupby_label = headers[report_groupby] if report_groupby else None
 
         # Date/Time formats from L10N deployment settings
         settings = current.deployment_settings
@@ -254,44 +240,39 @@ class S3XLS(S3Codec):
             styleEven.pattern.pattern = styleEven.pattern.SOLID_PATTERN
             styleEven.pattern.pattern_fore_colour = S3XLS.ROW_ALTERNATING_COLOURS[1]
 
-        # Initialize counters
-        rowCnt = 0
-        colCnt = 0
-
-        # Environment
-        request = current.request
-
-        # Title row
-        totalCols = len(headers)-1
-        if report_groupby != None:
-            totalCols -= 1
-
-        if totalCols > 0:
-            sheet1.write_merge(rowCnt, rowCnt, 0, totalCols, str(title),
-                               styleLargeHeader)
-        currentRow = sheet1.row(rowCnt)
-        currentRow.height = 440
-        rowCnt += 1
-        currentRow = sheet1.row(rowCnt)
-        currentRow.write(totalCols, request.now, styleNotes)
-        rowCnt += 1
-        currentRow = sheet1.row(rowCnt)
-
         # Header row
+        colCnt = -1
+        headerRow = sheet1.row(2)
         fieldWidth=[]
-        for label in headers:
-            if report_groupby != None:
-                if label == groupby_label:
-                    continue
-            currentRow.write(colCnt, str(label), styleHeader)
+        for selector in lfields:
+            if selector == report_groupby:
+                continue
+            label = headers[selector]
+            if label == "Id":
+                continue
+            if label == "Sort":
+                continue
+            colCnt += 1
+            headerRow.write(colCnt, str(label), styleHeader)
             width = len(label) * S3XLS.COL_WIDTH_MULTIPLIER
             fieldWidth.append(width)
             sheet1.col(colCnt).width = width
-            colCnt += 1
-
+        # Title row
+        currentRow = sheet1.row(0)
+        if colCnt > 0:
+            sheet1.write_merge(0, 0, 0, colCnt, str(title),
+                               styleLargeHeader)
+        currentRow.height = 500
+        currentRow = sheet1.row(1)
+        currentRow.write(colCnt, request.now, styleNotes)
         # fix the size of the last column to display the date
         if 16 * S3XLS.COL_WIDTH_MULTIPLIER > width:
-            sheet1.col(totalCols).width = 16 * S3XLS.COL_WIDTH_MULTIPLIER
+            sheet1.col(colCnt).width = 16 * S3XLS.COL_WIDTH_MULTIPLIER
+
+        # Initialize counters
+        totalCols = colCnt
+        rowCnt = 3
+        colCnt = 0
 
         subheading = None
         for item in items:
@@ -303,8 +284,39 @@ class S3XLS(S3Codec):
                 style = styleEven
             else:
                 style = styleOdd
-            for represent in item:
-                label = headers[colCnt]
+            if report_groupby:
+                represent = item[report_groupby]
+                # Strip away markup from representation
+                try:
+                    markup = etree.XML(str(represent))
+                    text = markup.xpath(".//text()")
+                    if text:
+                        text = " ".join(text)
+                    else:
+                        text = ""
+                    represent = text
+                except:
+                    pass
+                if subheading != represent:
+                    subheading = represent
+                    sheet1.write_merge(rowCnt, rowCnt, 0, totalCols,
+                                       subheading, styleSubHeader)
+                    rowCnt += 1
+                    currentRow = sheet1.row(rowCnt)
+                    if rowCnt % 2 == 0:
+                        style = styleEven
+                    else:
+                        style = styleOdd
+            for field in lfields:
+                label = headers[field]
+                if label == groupby_label:
+                    continue
+                if label == "Id":
+                    continue
+                represent = item[field]
+                coltype=types[colCnt]
+                if coltype == "sort":
+                    continue
                 if type(represent) is not str:
                     represent = unicode(represent)
                 if len(represent) > max_cell_size:
@@ -320,20 +332,6 @@ class S3XLS(S3Codec):
                     represent = text
                 except:
                     pass
-                if report_groupby != None:
-                    if label == groupby_label:
-                        if subheading != represent:
-                            subheading = represent
-                            sheet1.write_merge(rowCnt, rowCnt, 0, totalCols,
-                                               represent, styleSubHeader)
-                            rowCnt += 1
-                            currentRow = sheet1.row(rowCnt)
-                            if rowCnt % 2 == 0:
-                                style = styleEven
-                            else:
-                                style = styleOdd
-                        continue
-                coltype=types[colCnt]
                 value = represent
                 if coltype == "date":
                     try:

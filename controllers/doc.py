@@ -21,6 +21,13 @@ def index():
 def document():
     """ RESTful CRUD controller """
 
+    # Pre-processor
+    def prep(r):
+        # Location Filter
+        s3db.gis_location_filter(r)
+        return True
+    s3.prep = prep
+
     output = s3_rest_controller(rheader=document_rheader)
     return output
 
@@ -37,7 +44,7 @@ def document_rheader(r):
                                 TH("%s: " % T("URL")), table.url.represent( doc_document.url ),
                                 ),
                                 TR(
-                                TH("%s: " % T("Organization")), table.organisation_id.represent( doc_document.organisation_id ),
+                                TH("%s: " % ORGANISATION), table.organisation_id.represent( doc_document.organisation_id ),
                                 TH("%s: " % T("Person")), table.person_id.represent( doc_document.organisation_id ),
                                 ),
                             ),
@@ -99,8 +106,29 @@ def document_tabs(r):
     return tabs
 
 # =============================================================================
+def source():
+    """ RESTful CRUD controller """
+
+    # Pre-processor
+    def prep(r):
+        # Location Filter
+        s3db.gis_location_filter(r)
+        return True
+    s3.prep = prep
+
+    output = s3_rest_controller()
+    return output
+
+# =============================================================================
 def image():
     """ RESTful CRUD controller """
+
+    # Pre-processor
+    def prep(r):
+        # Location Filter
+        s3db.gis_location_filter(r)
+        return True
+    s3.prep = prep
 
     output = s3_rest_controller()
     return output

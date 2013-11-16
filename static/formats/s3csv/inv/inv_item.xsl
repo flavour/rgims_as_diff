@@ -21,8 +21,8 @@
            You can add a third argument &ignore_errors
 
          CSV fields:
-         Warehouse..............org_office
-         Warehouse Organisation.org_office.organisation_id
+         Warehouse..............inv_warehouse
+         Warehouse Organisation.inv_warehouse.organisation_id
          Category...............supply_item_category
          Category Code..........supply_item_category.code
          Catalog................supply_catalog.name
@@ -41,9 +41,10 @@
          Volume.................supply_item.volume
          Tracking Number........Tracking Number
          Bin....................bin
+         Received Date............received_date
          Expiry Date............expiry_date
          Supplier/Donor.........supply_org_id
-         Organisation/Department. organisation_id
+         Owned By (Organization/Branch). organisation_id
          Quantity...............inv_inv_item.quantity
          Unit Value.............pack_value
          Currency...............currency
@@ -58,7 +59,7 @@
     <xsl:key name="item_category" match="row" use="col[@field='Category']"/>
     <xsl:key name="supply_item" match="row" use="concat(col[@field='Item Name'],col[@field='Item Code'])"/>
     <xsl:key name="brand" match="row" use="col[@field='Brand']"/>
-    <xsl:key name="owner_organisation" match="row" use="col[@field='Organisation/Department']"/>
+    <xsl:key name="owner_organisation" match="row" use="col[@field='Owned By (Organization/Branch)']"/>
     <xsl:key name="supplier_organisation" match="row" use="col[@field='Supplier/Donor']"/>
     <xsl:key name="organisation" match="row" use="col[@field='Organisation']"/>
 
@@ -83,9 +84,9 @@
                     <xsl:with-param name="OrgName" select="col[@field='Warehouse Organisation']"/>
                 </xsl:call-template>
             </xsl:for-each>
-            <xsl:for-each select="//row[generate-id(.)=generate-id(key('owner_organisation', col[@field='Organisation/Department'])[1])]">
+            <xsl:for-each select="//row[generate-id(.)=generate-id(key('owner_organisation', col[@field='Owned By (Organization/Branch)'])[1])]">
                 <xsl:call-template name="Organisation">
-                    <xsl:with-param name="OrgName" select="col[@field='Organisation/Department']"/>
+                    <xsl:with-param name="OrgName" select="col[@field='Owned By (Organization/Branch)']"/>
                 </xsl:call-template>
             </xsl:for-each>
             <xsl:for-each select="//row[generate-id(.)=generate-id(key('supplier_organisation', col[@field='Supplier/Donor'])[1])]">
@@ -148,16 +149,16 @@
                 </xsl:attribute>
             </reference>
             <!-- Link to Warehouse -->
-            <reference field="site_id" resource="org_office">
+            <reference field="site_id" resource="inv_warehouse">
                 <xsl:attribute name="tuid">
                     <xsl:value-of select="$warehouse"/>
                 </xsl:attribute>
             </reference>
             <!-- Link to Organisation -->
-            <xsl:if test="col[@field='Organisation/Department']!=''">
+            <xsl:if test="col[@field='Owned By (Organization/Branch)']!=''">
                 <reference field="owner_org_id" resource="org_organisation">
                     <xsl:attribute name="tuid">
-                        <xsl:value-of select="col[@field='Organisation/Department']/text()"/>
+                        <xsl:value-of select="col[@field='Owned By (Organization/Branch)']/text()"/>
                     </xsl:attribute>
                 </reference>
             </xsl:if>
@@ -172,21 +173,9 @@
             <data field="currency"><xsl:value-of select="col[@field='Currency']/text()"/></data>
             <data field="tracking_no"><xsl:value-of select="col[@field='Tracking Number']/text()"/></data>
             <data field="bin"><xsl:value-of select="col[@field='Bin']/text()"/></data>
+            <data field="received_date"><xsl:value-of select="col[@field='Received Date']/text()"/></data>
             <data field="expiry_date"><xsl:value-of select="col[@field='Expiry Date']/text()"/></data>
             <data field="comments"><xsl:value-of select="col[@field='Comments']/text()"/></data>
-        </resource>
-
-    </xsl:template>
-
-    <!-- ****************************************************************** -->
-    <xsl:template name="Catalog">
-        <xsl:variable name="catalog" select="col[@field='Catalog']/text()"/>
-
-        <resource name="supply_catalog">
-            <xsl:attribute name="tuid">
-                <xsl:value-of select="$catalog"/>
-            </xsl:attribute>
-            <data field="name"><xsl:value-of select="$catalog"/></data>
         </resource>
 
     </xsl:template>
@@ -205,18 +194,36 @@
         </xsl:if>
     </xsl:template>
 
+    <!-- ****************************************************************** -->
+    <xsl:template name="Catalog">
+        <xsl:variable name="catalog" select="col[@field='Catalog']/text()"/>
+        <xsl:variable name="organisation" select="col[@field='Warehouse Organisation']/text()"/>
+
+        <resource name="supply_catalog">
+            <xsl:attribute name="tuid">
+                <xsl:value-of select="$catalog"/>
+            </xsl:attribute>
+            <data field="name"><xsl:value-of select="$catalog"/></data>
+        </resource>
+           <reference field="organisation_id" resource="org_organisation">
+               <xsl:attribute name="tuid">
+                   <xsl:value-of select="$organisation"/>
+               </xsl:attribute>
+           </reference>
+
+    </xsl:template>
+
 
     <!-- ****************************************************************** -->
     <xsl:template name="Warehouse">
         <xsl:variable name="warehouse" select="col[@field='Warehouse']/text()"/>
         <xsl:variable name="organisation" select="col[@field='Warehouse Organisation']/text()"/>
 
-        <resource name="org_office">
+        <resource name="inv_warehouse">
             <xsl:attribute name="tuid">
                 <xsl:value-of select="$warehouse"/>
             </xsl:attribute>
             <data field="name"><xsl:value-of select="$warehouse"/></data>
-            <data field="type">5</data>
             <!-- Link to Warehouse Organisation org -->
             <reference field="organisation_id" resource="org_organisation">
                 <xsl:attribute name="tuid">
@@ -289,6 +296,12 @@
             <reference field="brand_id" resource="supply_brand">
                 <xsl:attribute name="tuid">
                     <xsl:value-of select="col[@field='Brand']"/>
+                </xsl:attribute>
+            </reference>
+            <!-- Link to Supply Catalog -->
+            <reference field="catalog_id" resource="supply_catalog">
+                <xsl:attribute name="tuid">
+                    <xsl:value-of select="$catalog"/>
                 </xsl:attribute>
             </reference>
             <!-- Link to Supply Item Category -->

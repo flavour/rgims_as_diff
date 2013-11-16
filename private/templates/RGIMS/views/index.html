@@ -7,7 +7,7 @@
 {{try:}}
 {{=sit_dec_res_box}}
 {{except:}}{{pass}}
-{{=facility_box}}
+<!--{{=facility_box}}-->
 {{if AUTHENTICATED not in session.s3.roles:}}
 	<div id='login_box' class='menu_box'>
 	    {{if not self_registration or registered:}}
@@ -32,10 +32,13 @@
 {{pass}}
 {{=manage_facility_box}}
 </div>
-</div>
+<div id='login_form1'>
+</div></div>&nbsp&nbsp&nbsp&nbsp<a href="http://localhost/dashboard/report.php?datasrc=rgims" target="blank"><img src="/{{=appname}}/static/img/dashboard.png" height="200" width="200" align="center"> </a>
 <div id='about'>
  <p>
+ <p><center><h3>Sponsoring Organizations</h3></center></br>
+  <center><img src="/{{=appname}}/static/img/sponsor_logos.png"><div></br><h3></h3>
   RGIMS aims to provide a reliable and accurate inventory control of the UNWFP and DSWD logistics management systems of tracking, monitoring and reporting of relief goods intake, warehousing and outflow of donations.<br/>
-  </br>For more details on the RGIMS system please contact DSWD-NROC Office. 
- </p>
+  For more details on the RGIMS system please contact DSWD-NROC Office, Chapel Road, Pasay City at 852-8081 or 851-2681.</center>
+ </p> 
 </div>
